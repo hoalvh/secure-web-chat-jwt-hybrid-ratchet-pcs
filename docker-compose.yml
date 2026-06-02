@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: secure-chat-postgres
+    environment:
+      POSTGRES_USER: secure_chat
+      POSTGRES_PASSWORD: secure_chat
+      POSTGRES_DB: secure_chat
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secure_chat -d secure_chat"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+
