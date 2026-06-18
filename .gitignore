@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.venv/
 .pnpm-store/
 .yarn/
 .pnp.*
@@ -10,6 +11,8 @@ build/
 .vite/
 .turbo/
 coverage/
+__pycache__/
+.pytest_cache/
 
 # Runtime and logs
 *.log
@@ -37,6 +40,7 @@ private/
 *.sqlite
 *.sqlite3
 *.db
+data/
 postgres_data/
 
 # Test artifacts

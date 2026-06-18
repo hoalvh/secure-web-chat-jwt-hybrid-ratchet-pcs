@@ -9,6 +9,7 @@ General project information and stack-level decisions.
 | Document | Purpose |
 |---|---|
 | [Team and Execution Plan](00-project/team-and-execution-plan.md) | Team members, roles, ownership matrix, milestones, and branch workflow |
+| [Detailed Vietnamese Project Description](00-project/project-description-vn.md) | Full Vietnamese explanation for teammates, including architecture, flows, APIs, crypto design, demo script, and limitations |
 | [Project Scope and Non-Goals](00-project/project-scope.md) | Defines MVP depth, non-goals, database scope, and algorithm scope |
 | [Technology Decisions](00-project/technology-decisions.md) | Architecture, stack choices, alternatives, and trade-offs |
 | [Repository Hygiene](00-project/repository-hygiene.md) | GitHub repository naming, commit safety, `.env` rules, and secret-handling notes |

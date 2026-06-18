@@ -78,7 +78,7 @@ The planned token model is:
 
 - Access JWT lifetime: short.
 - Refresh token lifetime: longer but revocable.
-- Access JWT storage: browser memory where practical.
+- Access JWT storage: `sessionStorage` in the current runnable demo so a browser refresh does not force a new login.
 - Refresh token storage: HttpOnly cookie.
 - Refresh token database format: hashed opaque token with session metadata.
 
@@ -99,7 +99,7 @@ Recommended access JWT claims:
 
 Long-lived tokens should not be stored in localStorage because a successful XSS attack can read them directly. This project documents XSS as a serious browser-client threat, so the auth design should avoid the easiest token-exfiltration pattern.
 
-Short-lived access JWTs may be kept in memory. Refresh is handled through an HttpOnly cookie.
+Short-lived access JWTs may be kept in memory in stricter builds. The current course demo stores only the short-lived access JWT in `sessionStorage` so F5/reload preserves the demo session. Refresh is handled through an HttpOnly cookie, and long-lived tokens still must not be stored in `localStorage`.
 
 ## Server Session Alternative
 

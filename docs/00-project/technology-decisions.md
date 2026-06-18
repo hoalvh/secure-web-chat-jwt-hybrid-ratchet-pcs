@@ -1,5 +1,11 @@
 # Technology Decisions
 
+> Implementation note, 2026-06-18: the runnable MVP in this repository now
+> follows the course plan's smaller stack: Python FastAPI backend, HTML/CSS
+> vanilla JavaScript frontend, browser Web Crypto ECDH P-256 + HKDF-SHA256 +
+> AES-GCM, and a local JSON demo store. The older React/Fastify/Prisma notes
+> below are retained as historical or future expansion options.
+
 This document records the main technology choices for the project and the trade-offs behind them.
 
 ## 1. Decision Principles
