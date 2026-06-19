@@ -1,114 +1,117 @@
-# Key Schedule
+# Key Schedule and Ratchet
 
-This document specifies the key schedule and key erasure rules.
+This document describes the current demo key schedule and the intended ratchet behavior.
 
-## Key Types
+## Current Key Material
 
-- Root key.
-- Sending chain key.
-- Receiving chain key.
-- Message key.
-- Identity key pair.
-- Signed prekey pair.
-- Ratchet key pair.
+The current browser demo uses:
+
+- ECDH P-256 device private key in IndexedDB.
+- Contact ECDH P-256 public key from the server key directory.
+- ECDH shared secret from Web Crypto.
+- HKDF-SHA256 root key.
+- Directional chain key.
+- Per-message AES-GCM key.
+- SHA-256 public key fingerprint for safety display.
+
+The server stores only public key JWKs, fingerprints, ciphertext packets, and routing metadata.
+
+## Current Derivation Flow
+
+For each message, the browser derives:
+
+```text
+local private key + remote public key
+-> ECDH P-256 shared secret
+-> HKDF-SHA256 root key
+-> directional chain key
+-> per-message AES-GCM key
+```
+
+The current JavaScript labels are:
+
+```text
+root-from-ecdh
+chain:v1:{conversation_id}:{sender}->{recipient}
+next-chain-key:{step}
+message-key:{message_number}
+```
+
+Different labels are used so the same bytes are not reused for multiple roles.
 
 ## Symmetric Ratchet
 
-```text
-message_key_i   = HKDF(chain_key_i, "message-key")
-chain_key_{i+1} = HKDF(chain_key_i, "next-chain-key")
-```
-
-After encrypting or decrypting a message, the message key and old chain key should be erased from memory where practical.
-
-## DH Ratchet
+Conceptually:
 
 ```text
-dh_secret = X25519(local_new_ratchet_private, remote_ratchet_public)
-root_key' = HKDF(root_key, dh_secret, "dh-ratchet")
+message_key_i   = HKDF(chain_key_i, "message-key:i")
+chain_key_{i+1} = HKDF(chain_key_i, "next-chain-key:i")
 ```
 
-The DH ratchet is the main mechanism for post-compromise recovery.
+The current demo recomputes the chain from the root key and message number instead of maintaining a production-grade rolling chain state for every skipped/out-of-order message. This keeps the UI demo simple but should be described as a simplified ratchet, not a complete deployment design.
 
-## Library Decisions
+## DH Ratchet and PCS
 
-| Function | Choice | Reason |
-|---|---|---|
-| Key agreement | X25519 from libsodium | Avoids manual elliptic-curve implementation and fits the DH ratchet model |
-| Message encryption | XChaCha20-Poly1305 from libsodium | AEAD gives confidentiality plus tamper detection; large nonce space reduces accidental nonce-collision risk |
-| Key derivation | HKDF-SHA-256 through a reviewed library | HKDF is suitable for deriving independent keys from root/chain material |
-| Hashing/fingerprints | SHA-256 through `@noble/hashes` or equivalent | Useful for fingerprints, safety numbers, and deterministic test vectors |
-| Randomness | Cryptographic random bytes from libsodium/Web Crypto boundary | Ratchet keys, nonces, and prekeys must not use normal pseudorandom functions |
-
-## Key Schedule Purpose
-
-The project should not reuse one encryption key for all messages. The key schedule derives:
-
-- Root keys for long-running session evolution.
-- Sending chain keys for messages sent by the local device.
-- Receiving chain keys for messages received from the remote device.
-- One-time message keys for AEAD encryption/decryption.
-
-This structure also makes state-leak experiments easier to define.
-
-## HKDF Labels
-
-Different labels must be used for different derived values so keys are separated by purpose.
-
-Initial labels:
-
-| Label | Output |
-|---|---|
-| `root-from-x3dh` | Initial root key |
-| `dh-ratchet-root` | New root key after DH ratchet |
-| `dh-ratchet-chain` | New sending/receiving chain key |
-| `message-key` | AEAD message key |
-| `next-chain-key` | Next chain key |
-| `header-fingerprint` | Optional display/test helper |
-
-Using labels prevents accidental reuse of the same derived bytes for multiple roles.
-
-## Symmetric Ratchet Limitation
-
-The symmetric ratchet updates keys in one direction:
+The DH ratchet goal is:
 
 ```text
-chain_key_i -> message_key_i
-chain_key_i -> chain_key_{i+1}
+old root key + fresh DH secret -> new root key and new chain keys
 ```
 
-This protects old messages if old keys are erased. However, if an attacker steals `chain_key_i`, the attacker can compute future chain keys until fresh external entropy enters the session.
+This is what gives post-compromise recovery: if an attacker temporarily learns current symmetric state but later loses access, a fresh DH step can introduce entropy the attacker does not know.
 
-The DH ratchet is added to bring fresh Diffie-Hellman material into the session.
-
-## DH Ratchet Role
-
-The DH ratchet mixes a new Diffie-Hellman output into the root key:
+In the current runnable MVP, the full DH ratchet message flow is not implemented. The Security Lab endpoint `/lab/state-compromise` reports PCS-style metrics for a controlled scenario:
 
 ```text
-root_key, dh_secret -> new_root_key, new_chain_key
+compromise_at_message = 3
+rekey_at_message = 5
+total_messages = 8
 ```
 
-If the attacker temporarily compromises local state but later loses access, a future DH exchange can create keys the attacker cannot derive. This is the post-compromise security behavior the project should test.
+The report should present this as a PCS demonstration metric, not as proof of a production Double Ratchet.
+
+## AEAD Key Use
+
+Each message is encrypted with AES-GCM:
+
+- 256-bit key derived through HKDF.
+- 96-bit random nonce.
+- 128-bit authentication tag.
+- Canonical packet header as associated data.
+
+The AES-GCM associated data must include sender, recipient, device IDs, conversation ID, message number, and the ratchet/fingerprint marker. This prevents attackers from moving ciphertext between conversations or changing packet metadata silently.
 
 ## Key Erasure Rules
 
-The implementation should erase or overwrite sensitive values where practical:
+The implementation should avoid keeping unnecessary sensitive material:
 
-- Erase each `message_key` after encryption/decryption.
-- Erase old `chain_key` after deriving the next chain key.
-- Replace old root keys after DH ratchet.
-- Avoid logging plaintext, message keys, chain keys, root keys, private keys, or raw ratchet state.
+- Do not log plaintext.
+- Do not log message keys, root keys, chain keys, or private keys.
+- Remove plaintext from temporary UI variables when practical.
+- Treat IndexedDB private keys as sensitive demo state.
+- Never send private key JWK field `d` to the backend.
 
-JavaScript does not guarantee perfect memory erasure because of runtime garbage collection. The project should state this limitation and treat key erasure as an application-state rule, not a low-level memory guarantee.
+JavaScript does not guarantee perfect memory erasure because of runtime garbage collection. The project should state this limitation and treat key erasure as an application-state rule.
 
-## Test Vectors
+## Test Vector Targets
 
-The project should add deterministic tests for:
+The project should add deterministic tests or scripted checks for:
 
-- Same input key material produces the same derived keys.
-- Different labels produce different outputs.
-- Different message counters produce different message keys.
-- Old message keys are removed from application state after use.
-- A leaked chain key cannot decrypt messages before that chain key if old keys were erased.
-- A leaked chain key can decrypt future messages until DH rekey, demonstrating why DH ratchet is necessary.
+- Same ECDH/root inputs produce the same derived key.
+- Different contacts produce different root keys.
+- Different message numbers produce different message keys.
+- Different directions produce different chain keys.
+- Header changes cause AES-GCM decrypt failure.
+- Replayed packet IDs are rejected by the lab/client logic.
+- PCS lab metrics show a recovery point after DH rekey.
+
+## Future Work
+
+Future protocol work can add:
+
+- Full DH ratchet state in the message flow.
+- Skipped-message key handling.
+- Out-of-order message support.
+- Signed prekeys or X3DH-style session setup.
+- Non-extractable browser private keys where demo inspection is no longer needed.
+- A shared protocol package with test vectors.

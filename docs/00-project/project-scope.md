@@ -4,36 +4,34 @@ This document records what the team will build for the MVP and what will stay ou
 
 ## 1. Scope Statement
 
-This is a **Cryptography course project**. The core work is the secure messaging layer:
+This is a Cryptography course project. The core work is the secure messaging layer:
 
 - End-to-end encryption.
-- Device identity and key binding.
+- Device identity and public key binding.
 - Per-message key derivation.
-- Symmetric ratchet.
-- DH ratchet.
-- Forward secrecy.
-- Post-compromise security.
+- Symmetric ratchet concept.
+- DH rekey/post-compromise security concept.
+- Forward secrecy explanation.
 - Replay and tamper resistance.
 - Key-substitution warning.
 - Security experiments.
-- Basic benchmarks.
+- Basic benchmark or timing evidence.
 
-The web application, database, UI, and local setup are included to support the demo. They should be correct and easy to run, but they are not separate research topics.
+The web application, local storage, UI, and server setup are included to support the demo. They should be correct and easy to run, but they are not separate product research topics.
 
-## 2. Depth by Area
+## 2. Current MVP Depth by Area
 
-| Area | Expected Depth | Reason |
+| Area | Expected depth | Current implementation |
 |---|---|---|
-| E2EE protocol | Deep | Core cryptography topic |
-| Key schedule and ratchet | Deep | Required for forward secrecy and PCS |
-| Threat model | Deep | Required to define attacker capabilities and claims |
-| Security Lab | Deep | Shows how the design behaves under attack scenarios |
-| Security benchmarks | Medium | Measures crypto, auth, and relay overhead |
-| Authentication and JWT | Secure MVP | Needed for login and WebSocket access |
-| Database design | Basic correctness | Needed for users, devices, messages, and lab logs |
-| Frontend UI | Demo-ready security UX | Needed to show encryption, trust, and lab states |
-| Deployment | Local reproducible setup | Needed for team development and grading |
-| Scalability | Basic design awareness | Full distributed scaling is out of scope |
+| E2EE protocol | Deep | Browser Web Crypto ECDH P-256, HKDF-SHA256, AES-GCM |
+| Key schedule and ratchet | Deep enough for course demo | Per-message derivation plus PCS lab metric |
+| Threat model | Deep | Server compromise, JWT theft, replay/tamper, key substitution, XSS limits |
+| Security Lab | Deep | FastAPI lab endpoints and browser lab UI |
+| Authentication and JWT | Secure MVP | Argon2id, HMAC-SHA256 JWT, refresh cookie |
+| Storage | Demo correctness | Local JSON store under `data/`, not production database |
+| Frontend UI | Demo-ready security UX | HTML/CSS/vanilla JS with badges and lab output |
+| Deployment | Local reproducible setup | Run one FastAPI app locally |
+| Scalability | Design awareness only | Out of current scope |
 
 ## 3. In Scope
 
@@ -43,29 +41,27 @@ The following are in scope:
 - Argon2id password hashing.
 - Short-lived JWT access tokens.
 - Refresh-token session management.
-- Device registration.
-- Public key bundle storage.
+- Device public key registration.
+- Public key bundle lookup.
 - Ciphertext-only message relay.
 - One-to-one encrypted chat.
-- Client-side private keys and ratchet state.
-- Safety number or fingerprint display.
+- Client-side private keys in IndexedDB.
+- Fingerprint display.
 - Key-change warning.
 - Security Lab attack simulations.
-- Basic performance benchmarks.
+- Basic performance/security evidence.
 - Clear documentation and reproducible demo setup.
 
 ## 4. Out of Scope
 
-The following are out of scope for the MVP:
+The following are out of scope for the current MVP:
 
-- Advanced database query optimization.
-- Custom database indexing algorithms.
-- Distributed database sharding or replication.
-- High-availability deployment.
-- Production Kubernetes deployment.
-- Full observability stack.
+- Production deployment hardening.
 - Full multi-device synchronization.
+- Full Signal X3DH/Double Ratchet compatibility.
 - Group messaging with MLS.
+- Key transparency.
+- Encrypted backups and recovery keys.
 - Push notifications.
 - File sharing.
 - Full-text message search.
@@ -74,56 +70,42 @@ The following are out of scope for the MVP:
 - MFA.
 - Account recovery workflow.
 - Formal verification with Tamarin or ProVerif.
-- Production-grade Signal compatibility.
+- Advanced database optimization.
+- Distributed database sharding or replication.
 
 These topics can be mentioned as future work, but they should not take time away from the encrypted chat protocol and experiments.
 
-## 5. Database Scope
+## 5. Storage Scope
 
-The database supports authentication, device metadata, ciphertext storage, and lab logs.
+The current MVP uses a local JSON demo store. It supports:
 
-The MVP should implement:
+- User records with password hashes.
+- Refresh-session hashes.
+- Device public key bundles.
+- Ciphertext message packets.
+- Security event logs.
 
-- Correct relational schema.
-- Primary keys and foreign keys.
-- Unique constraints for users and devices.
-- Indexes for common lookup paths.
-- Safe storage of password hashes.
-- Hashed refresh-token storage.
-- Public key bundle storage.
-- Ciphertext message storage.
-- Security event logs for experiments.
+This store is useful for the Security Lab because it is easy to inspect and prove that plaintext/private keys are absent.
 
-Recommended basic indexes:
+The current MVP does not implement:
 
-| Table | Index Purpose |
-|---|---|
-| `users` | unique username/email lookup |
-| `devices` | lookup devices by user ID |
-| `public_key_bundles` | lookup active bundle by user/device |
-| `refresh_sessions` | lookup active session by user/device/session ID |
-| `messages` | lookup messages by conversation and creation time |
-| `security_events` | lookup lab events by scenario and time |
+- PostgreSQL-backed persistence in the running app.
+- Prisma/SQLAlchemy migrations.
+- Foreign keys and relational constraints.
+- Advanced indexes.
+- Large-scale archival or retention behavior.
 
-The MVP does not include advanced database work such as:
-
-- Query planner tuning.
-- Partitioning.
-- Sharding.
-- Replication.
-- Custom indexing structures.
-- Lock-contention optimization.
-- Large-scale archival strategy.
+PostgreSQL and migrations are a future expansion path, not a current runtime requirement.
 
 ## 6. Algorithm Scope
 
 The project uses algorithms at three levels.
 
-| Layer | Expected Depth |
+| Layer | Expected depth |
 |---|---|
-| Cryptographic algorithms | Use reviewed libraries and explain protocol composition |
+| Cryptographic algorithms | Use reviewed browser/server libraries and explain protocol composition |
 | Application algorithms | Keep simple and correct: validation, routing, state transitions |
-| Database algorithms | Use standard relational modeling, constraints, and practical indexes |
+| Storage algorithms | Use simple demo persistence now; use normal database constraints later |
 
 The project should not implement low-level cryptographic primitives manually. The team should focus on protocol composition, state transitions, threat model, and experiments.
 
@@ -131,16 +113,16 @@ The project should not implement low-level cryptographic primitives manually. Th
 
 Performance measurement is in scope. Heavy optimization is not.
 
-The MVP should measure:
+The MVP should measure or at least prepare evidence for:
 
 - Login latency.
 - JWT verification time.
 - WebSocket connect/auth latency.
 - Encrypt time per message.
 - Decrypt time per message.
-- DH ratchet rekey latency.
+- PCS rekey metric.
 - Ciphertext overhead.
-- Server relay throughput.
+- Server relay latency.
 
 The project does not need to optimize for:
 
@@ -155,10 +137,10 @@ The project does not need to optimize for:
 
 If the project is asked about database algorithms, scalability, or missing chat features, use the scope in this document:
 
-- Database work is limited to schema correctness, constraints, safe credential/session storage, and practical indexes.
-- PostgreSQL handles indexing and query planning. The team does not implement a custom database engine or custom indexing algorithm.
-- The system is not production-ready. Production work would require deployment hardening, monitoring, incident response, account recovery, MFA, multi-device support, and security review.
-- Extra chat features such as avatars, files, search, read receipts, and push notifications are lower priority than E2EE, ratcheting, replay/tamper handling, and PCS experiments.
+- Current storage is a demo JSON store for local evidence.
+- Production database design is future work.
+- The system is not production-ready.
+- Extra chat features such as avatars, files, search, read receipts, and push notifications are lower priority than E2EE, ratcheting concepts, replay/tamper handling, and PCS experiments.
 
 ## 9. Future Work
 
@@ -169,8 +151,7 @@ Future extensions can include:
 - Key transparency.
 - Encrypted backup and recovery keys.
 - MFA and account recovery.
-- Production deployment.
-- Database partitioning for large message history.
-- Message search over encrypted local storage.
+- PostgreSQL persistence with migrations.
+- React/TypeScript UI refactor.
+- Browser automation tests.
 - Formal verification of protocol properties.
-

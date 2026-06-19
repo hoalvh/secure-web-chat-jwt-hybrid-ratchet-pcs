@@ -1,130 +1,100 @@
 # Security UX
 
-UI/UX in this project is used to show security state clearly.
+UI/UX in this project is used to show security state clearly. The interface is not a full messaging product; its main job is to make cryptographic behavior visible during demos, tests, screenshots, and report writing.
 
-## Scope Boundary
+## Current UI Scope
 
-The UI is not a full messaging product interface. Its main role is to make cryptographic behavior visible during demo and testing.
-
-The MVP UI should be good enough for:
+The current MVP UI supports:
 
 - Login and registration.
-- Device setup.
-- One-to-one chat.
-- Contact/key verification.
-- Key-change warnings.
-- Replay/tamper/decrypt-failure states.
+- Device key setup after login.
+- Contact selection.
+- One-to-one encrypted chat.
+- Fingerprint display.
+- Key-change warning.
+- Replay/tamper/decrypt-failure lab states.
 - Security Lab experiments.
 
-Future work:
-
-- Avatars and profile customization.
-- Rich message formatting.
-- File attachments.
-- Push notifications.
-- Global search.
-- Advanced accessibility polish beyond the MVP baseline.
-- Full responsive product-grade mobile layout.
-
-The priority is security clarity: the demo should show what is encrypted, what is verified, what failed, and when post-compromise recovery occurs.
+Future product work such as avatars, file attachments, push notifications, global search, and production mobile polish is out of scope.
 
 ## Purpose
 
 The interface should help users and evaluators understand:
 
 - Whether a conversation is encrypted.
-- Whether a contact key has been verified.
-- Whether a key has changed.
+- Whether a contact key is unverified or changed.
+- Whether a message failed to decrypt.
 - Whether a replay or tamper event was detected.
-- Whether a session has rekeyed.
-- Whether the system recovered after a DH ratchet event.
+- Whether the Security Lab shows server-side plaintext exposure or ciphertext-only storage.
+- Whether the PCS rekey metric indicates recovery after a compromise point.
 
 ## Required States
 
-- `Encrypted`
+- `AES-GCM active`
+- `ECDH ready`
 - `Key verified`
 - `Unverified key`
 - `Key changed`
-- `Message decrypt failed`
+- `Decrypt failed`
 - `Replay detected`
 - `Tamper detected`
-- `Rekey in progress`
-- `Rekey complete`
-- `Compromised in lab mode`
-- `Recovered after DH ratchet`
+- `WS auth ok`
+- `DH_REKEY_RECOVERED`
 
-## Security Lab
+## Current UI Stack Decisions
 
-Security Lab should visualize ciphertext, attack actions, affected messages, compromise windows, and recovery points.
-
-## UI Stack Decisions
-
-| Decision | Choice | Reason |
+| Decision | Current choice | Reason |
 |---|---|---|
-| UI framework | React | Security state changes map naturally to components and state |
-| Language | TypeScript | UI states, packet metadata, and lab results can be typed |
-| Build tool | Vite | Fast local iteration for demo screens |
-| Styling | Tailwind CSS | Consistent badges, warnings, panels, and lab controls without a large custom CSS system |
-| Browser tests | Playwright | Verifies that security warnings and lab states appear in real browser flows |
+| UI framework | Plain HTML + vanilla JavaScript | No build step; direct Web Crypto and IndexedDB access |
+| Styling | `apps/web/src/styles.css` | Small predictable stylesheet for demo screenshots |
+| State storage | `sessionStorage` and IndexedDB | Short-lived access token survives refresh; private device key stays client-side |
+| Lab output | JSON rendered in `<pre>` | Easy to inspect and paste into report evidence |
+| Verification | Manual browser demo plus backend pytest | Browser automation is future work |
 
-## Security UX Notes
+React, TypeScript, Tailwind, and Playwright remain reasonable future choices, but they are not required to run the current MVP.
 
-The protocol can still fail in practice if the interface hides important security information. The UI should expose trust state instead of treating encryption as an invisible background feature.
+## Current UI Surfaces
 
-The interface must answer:
-
-- Is this conversation encrypted?
-- Is this contact key verified?
-- Did the key change?
-- Was a message rejected because of tampering?
-- Was a replay detected?
-- Did the session rekey?
-- Did the lab attacker still have access after DH ratchet recovery?
-
-## Required Components
-
-Planned React components:
-
-| Component | Purpose |
+| Surface | Purpose |
 |---|---|
-| `SecurityBadge` | Shows encrypted, verified, unverified, or warning state |
-| `SafetyNumberModal` | Displays fingerprint/safety number for contact verification |
-| `KeyChangeWarning` | Blocks or warns before continuing after identity-key change |
-| `DecryptFailureNotice` | Explains that a message failed authentication/decryption |
-| `ReplayDetectedNotice` | Shows replay rejection in chat and lab views |
-| `RekeyStatus` | Shows rekey progress and completion |
-| `LabAttackPanel` | Triggers server compromise, JWT theft, replay, tamper, key substitution, and state compromise |
-| `LabTimeline` | Visualizes compromise point, exposed window, and recovery point |
-| `MetricCard` | Displays benchmark and experiment metrics |
-
-## Tailwind Usage
-
-Tailwind is used because the visual requirements are mostly state clarity, consistency, and speed of implementation.
-
-The project should still avoid messy UI:
-
-- Use reusable components for repeated states.
-- Keep warning colors consistent.
-- Avoid mixing many badge styles for the same meaning.
-- Make lab results readable in screenshots for the final report.
+| Auth panel | Register/login and status messages |
+| Topbar | Current session, device badge, refresh/logout |
+| Sidebar | Contact list, manual open, fingerprint/trust display |
+| Chat panel | Encrypted messages and decrypt failures |
+| Security Lab panel | Server DB, stolen JWT, replay, tamper, key change, PCS rekey actions |
 
 ## Security-State Design Rules
 
 - Never show only color for critical warnings; use text labels too.
-- Key-change warnings should be visually stronger than normal notifications.
-- A decrypt failure should not expose raw exception details to the user.
-- The Security Lab may show technical details, but the normal chat view should stay understandable.
+- Key-change warnings should be visually stronger than normal status updates.
+- A decrypt failure should not expose sensitive raw keys or plaintext.
+- The Security Lab may show technical JSON, but the normal chat view should stay understandable.
 - Verified and unverified states must be visually distinct.
-- Recovery after DH ratchet should be visible in the lab timeline.
+- PCS/rekey results should be visible as structured lab output.
 
-## Playwright Test Targets
+## Evidence Targets
 
-The UI should be tested with browser automation for:
+The final report should capture:
+
+- Register/login screen.
+- Device/fingerprint state.
+- Alice sending an encrypted message.
+- Bob decrypting the message locally.
+- Server DB lab showing ciphertext-only rows.
+- Stolen JWT lab showing server access without plaintext decryption.
+- Replay rejected.
+- Tamper rejected by AES-GCM.
+- Key changed warning.
+- PCS rekey metric output.
+
+## Future Browser Test Targets
+
+When Playwright or another browser test runner is added, test:
 
 - Register and login flow.
-- Device setup appears after first login.
-- Safety number modal opens and displays a fingerprint.
-- Key-change warning appears after simulated key substitution.
-- Tampered message displays a failure state.
-- Replayed message is rejected and shown in the lab.
-- DH rekey changes the lab status from compromised to recovered.
+- Device setup after first login.
+- Contact fingerprint display.
+- Key-change warning after simulated key substitution.
+- Tampered packet decrypt failure.
+- Replayed packet rejection.
+- Security Lab button outputs.
