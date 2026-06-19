@@ -42,7 +42,7 @@ Each experiment should include:
 |---|---|---|
 | Backend security-boundary tests | Pytest + FastAPI TestClient | Already verifies auth/device/message/lab rules |
 | Manual browser evidence | Local browser at `http://127.0.0.1:8000` | Current UI has no build step and is easy to demo |
-| Raw evidence storage | `benchmarks/results/` and `experiments/<scenario>/` | Keeps result files separate from source code |
+| Raw evidence storage | `docs/02-evaluation/` until real scripts exist | Keeps result notes close to the evaluation docs |
 | Future browser tests | Playwright | Good next step for warning and lab-state verification |
 | Future API benchmarks | k6 or a Python/httpx script | Current backend is FastAPI, not Fastify |
 
@@ -91,6 +91,8 @@ actual-result.md
 raw-output file
 screenshot folder if UI evidence is needed
 ```
+
+The current repository does not keep empty experiment folders. Add a dedicated evidence folder only when real scripts, screenshots, or raw outputs exist.
 
 ## Initial Metrics
 

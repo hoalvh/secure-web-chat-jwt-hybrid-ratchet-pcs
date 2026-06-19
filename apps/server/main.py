@@ -715,7 +715,9 @@ def reset_demo_store() -> None:
 
 if WEB_DIR.exists():
     app.mount("/src", StaticFiles(directory=WEB_DIR / "src"), name="web-src")
-    app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="web-assets")
+    assets_dir = WEB_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="web-assets")
 
 
 @app.get("/")

@@ -113,10 +113,7 @@ Primary folders:
 ```text
 apps/server/
 apps/server/tests/
-experiments/server_compromise/
-experiments/jwt_theft/
-experiments/replay_tamper/
-experiments/key_substitution/
+docs/02-evaluation/
 ```
 
 Main deliverables:
@@ -146,9 +143,8 @@ Primary folders:
 
 ```text
 apps/web/src/app.js
-packages/protocol/
-experiments/forward_secrecy/
-experiments/post_compromise_security/
+docs/01-design/
+docs/02-evaluation/
 ```
 
 Main deliverables:
@@ -180,7 +176,7 @@ Primary folders:
 apps/web/
 apps/web/src/
 docs/01-design/security-ux.md
-benchmarks/results/
+docs/02-evaluation/
 ```
 
 Main deliverables:

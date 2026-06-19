@@ -33,8 +33,8 @@ The project uses a modular layered repository:
 
 - `apps/web/` contains the browser UI, IndexedDB state, and Web Crypto E2EE logic.
 - `apps/server/` contains FastAPI routes for auth, device/key APIs, ciphertext relay, WebSocket auth, and lab controls.
-- `docs/`, `experiments/`, and `benchmarks/` hold design evidence and grading artifacts.
-- `packages/protocol/` and `prisma/` are reserved for future shared protocol code and database migration work.
+- `docs/` contains design evidence, evaluation notes, and grading artifacts.
+- `scripts/` contains setup, test, run, and reset helpers.
 
 Classic MVC is not the main organizing model because the hard part is protocol state: root keys, chain keys, message counters, associated data, replay handling, and compromise-recovery experiments. Keeping server, browser, and protocol documentation separate makes the trust boundary easier to review.
 
@@ -192,8 +192,8 @@ Reasonable next steps:
 
 - Browser UI automation with Playwright.
 - Deterministic Web Crypto/key schedule tests.
-- Scripted Security Lab evidence under `experiments/`.
-- Benchmark outputs under `benchmarks/results/`.
+- Scripted Security Lab evidence under `docs/02-evaluation/` or a future dedicated evidence folder.
+- Benchmark outputs can be added later when real benchmark scripts exist.
 
 ## 9. Future Expansion Path
 
@@ -201,9 +201,8 @@ Reasonable next steps:
 |---|---|---|
 | React + TypeScript + Vite | Larger UI, typed state, reusable components | Not used by current MVP |
 | Tailwind CSS | Faster repeated security-state styling | Not used by current MVP |
-| PostgreSQL | Durable relational storage and constraints | Docker scaffold exists, app does not use it |
+| PostgreSQL | Durable relational storage and constraints | Not used by current MVP |
 | Prisma or SQLAlchemy | Reproducible schema/migrations | Reserved for later |
-| `packages/protocol/` | Shared packet validation/test vectors | Placeholder only |
 | Playwright | Browser evidence for warnings/lab states | Planned |
 | k6 or similar | Scenario benchmarks | Planned |
 

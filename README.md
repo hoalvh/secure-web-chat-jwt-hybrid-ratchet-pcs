@@ -35,7 +35,31 @@ The current MVP includes:
 
 ## Run Locally
 
-From the repository root:
+Recommended Windows/PowerShell path after cloning from GitHub:
+
+```powershell
+git clone <repo-url>
+cd secure-web-chat-jwt-hybrid-ratchet-pcs
+.\scripts\setup_windows.ps1
+.\scripts\test.ps1
+.\scripts\run_dev.ps1
+```
+
+If PowerShell blocks local scripts on a new machine, run the same commands with a temporary execution-policy bypass:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_dev.ps1
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Manual equivalent from the repository root:
 
 ```powershell
 python -m venv .venv
@@ -49,6 +73,12 @@ Open:
 
 ```text
 http://127.0.0.1:8000
+```
+
+To reset local demo data before recording or presenting:
+
+```powershell
+.\scripts\reset_demo_data.ps1
 ```
 
 Suggested demo accounts:
@@ -155,7 +185,6 @@ GET  /lab/events
 secure-web-chat/
 |-- README.md
 |-- requirements.txt
-|-- docker-compose.yml
 |-- .env.example
 |-- apps/
 |   |-- server/
@@ -165,12 +194,7 @@ secure-web-chat/
 |       |-- index.html
 |       `-- src/
 |-- docs/
-|-- packages/
-|-- prisma/
-|-- experiments/
-|-- benchmarks/
-|-- report/
-`-- presentation/
+`-- scripts/
 ```
 
 | Directory | Purpose |
@@ -178,12 +202,7 @@ secure-web-chat/
 | `apps/server/` | Current FastAPI backend and backend tests |
 | `apps/web/` | Current browser UI, Web Crypto E2EE logic, and styling |
 | `docs/` | Project docs, design decisions, protocol notes, evaluation plan |
-| `packages/protocol/` | Reserved for future shared protocol helpers and tests |
-| `prisma/` | Reserved for future database schema/migrations |
-| `experiments/` | Scenario folders for reproducible security experiments |
-| `benchmarks/` | Benchmark scripts and result outputs |
-| `report/` | Final written report material |
-| `presentation/` | Slides, demo script, and presentation assets |
+| `scripts/` | Setup, test, run, and reset helpers for Windows/PowerShell |
 
 ## Documentation
 
@@ -194,6 +213,7 @@ secure-web-chat/
 | [Project Scope and Non-Goals](docs/00-project/project-scope.md) | MVP depth, non-goals, storage scope, algorithm scope |
 | [Technology Decisions](docs/00-project/technology-decisions.md) | Current stack choices, trade-offs, future expansion |
 | [Repository Hygiene](docs/00-project/repository-hygiene.md) | GitHub setup, `.env` rules, secret-handling notes |
+| [GitHub Publish Checklist](docs/00-project/github-publish-checklist.md) | Files to keep, files to ignore, and fresh-clone run checks |
 | [Threat Model](docs/01-design/threat-model.md) | Assets, trust boundaries, attacker scenarios |
 | [Authentication and JWT](docs/01-design/authentication-and-jwt.md) | Auth flow, JWT, refresh session, WebSocket auth |
 | [Device Identity and Key Binding](docs/01-design/device-identity-and-key-binding.md) | Device keys, public key binding, fingerprint warnings |
@@ -201,6 +221,7 @@ secure-web-chat/
 | [Key Schedule and Ratchet](docs/01-design/key-schedule-and-ratchet.md) | Root keys, chain keys, message keys, ratchet limitations |
 | [Security UX](docs/01-design/security-ux.md) | UI states for encryption, warnings, and lab evidence |
 | [Experiment Plan](docs/02-evaluation/experiment-plan.md) | Server compromise, stolen JWT, replay, tamper, FS, PCS |
+| [Risks, Goals, Solution, Architecture, Demo](docs/02-evaluation/risks-goals-solution-architecture-demo.md) | Clear risks-to-goals mapping, architecture, demo results, and commands |
 
 ## Tests
 

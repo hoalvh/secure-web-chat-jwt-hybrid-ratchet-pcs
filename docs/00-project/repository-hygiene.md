@@ -36,13 +36,9 @@ These files are safe and useful to commit:
 - `README.md`
 - `docs/**`
 - `apps/**` source code and tests
-- `packages/**` source placeholders or future protocol code
-- `prisma/**` placeholders or future migrations
-- `experiments/**` scripts and small result summaries
-- `benchmarks/**` scripts and selected result summaries
 - `.env.example`
-- `docker-compose.yml`
 - `requirements.txt`
+- `scripts/**`
 - `.gitignore`
 
 ## Do Not Commit
@@ -83,12 +79,6 @@ SECURE_CHAT_DATA_DIR
 ```
 
 Developers may create a local `.env` or set variables directly in PowerShell. Local `.env` files must stay ignored.
-
-## Docker Compose Note
-
-`docker-compose.yml` currently provides a local PostgreSQL scaffold. The running FastAPI MVP uses a JSON demo store, so Docker is not required for the current demo.
-
-The password in `docker-compose.yml` is acceptable only as a local development placeholder. It must not be reused in production or deployment environments.
 
 ## Before First Push
 

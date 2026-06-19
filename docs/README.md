@@ -14,6 +14,7 @@ General project information and stack-level decisions.
 | [Project Scope and Non-Goals](00-project/project-scope.md) | Defines MVP depth, non-goals, database scope, and algorithm scope |
 | [Technology Decisions](00-project/technology-decisions.md) | Architecture, stack choices, alternatives, and trade-offs |
 | [Repository Hygiene](00-project/repository-hygiene.md) | GitHub repository naming, commit safety, `.env` rules, and secret-handling notes |
+| [GitHub Publish Checklist](00-project/github-publish-checklist.md) | What to keep, what not to push, and how to verify a fresh clone |
 
 ## 01. Design
 
@@ -35,15 +36,12 @@ Experiment and benchmark planning.
 | Document | Purpose |
 |---|---|
 | [Experiment Plan](02-evaluation/experiment-plan.md) | Server compromise, stolen JWT, replay, tamper, key substitution, FS, and PCS experiments |
+| [Risks, Goals, Solution, Architecture, Demo](02-evaluation/risks-goals-solution-architecture-demo.md) | Clear explanation of risks-to-goals mapping, architecture, demo architecture, expected results, and commands |
 | [Results Template](02-evaluation/results-template.md) | Tables and interpretation rules for security and performance results |
-
-## Proposal
-
-The `proposal/` folder is reserved for proposal-specific drafts, exported text, and submission material.
 
 ## Naming Convention
 
 - `00-project/` contains general project metadata and high-level decisions.
 - `01-design/` contains technical design documents.
-- `02-evaluation/` contains experiments, benchmark plans, and result templates.
-- File names are descriptive and stable enough to reference from the report and presentation.
+- `02-evaluation/` contains security experiment plans, demo evidence notes, and result templates.
+- File names are descriptive and stable enough to reference from the final report or slides.

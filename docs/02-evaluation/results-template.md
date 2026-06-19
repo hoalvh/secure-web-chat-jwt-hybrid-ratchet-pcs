@@ -15,9 +15,10 @@ This document summarizes benchmark and security experiment results. Replace `TBD
 Raw outputs should be stored under:
 
 ```text
-benchmarks/results/
-experiments/<scenario>/
+docs/02-evaluation/
 ```
+
+If the team later adds real benchmark scripts or raw screenshot sets, create a dedicated evidence folder at that time. Do not keep empty placeholder folders in the repository.
 
 ## Result Structure
 
