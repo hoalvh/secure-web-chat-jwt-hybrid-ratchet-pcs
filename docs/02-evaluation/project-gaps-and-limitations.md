@@ -16,6 +16,7 @@ Project hiện tại đã làm được:
 - Server chỉ lưu ciphertext, nonce, tag và metadata.
 - Admin dashboard xem password hash, refresh-token hash, public key, ciphertext và event log.
 - User thường chỉ chat và xem key/fingerprint.
+- Có script `scripts/decrypt_message.mjs` để kiểm tra/decrypt tay một ciphertext khi có đúng private key browser.
 
 Project hiện tại chưa phải production vì:
 
@@ -89,6 +90,7 @@ Project mượn ý tưởng Signal nhưng chưa phải Signal implementation.
 | Recovery phrase | Chưa có | User chưa restore được key trên máy mới | Sinh 12/24 words hoặc backup code bằng CSPRNG |
 | Key export | Chưa có | Chưa export encrypted private key | Export private key đã được wrap/encrypt |
 | Key import | Chưa có | Chưa import key khi đổi máy | Import từ recovery phrase hoặc backup file |
+| Manual decrypt export | Có thể export tạm để chạy `scripts/decrypt_message.mjs` | Đây là debug/evidence, không phải backup an toàn | Thêm encrypted export/import flow |
 | Endpoint compromise | Chưa xử lý | Malware/XSS vẫn có thể lấy key trong browser | CSP, sanitization, security audit, không claim chống máy bị chiếm |
 | MetaMask/wallet identity | Chưa có | Chưa connect wallet, chưa ký binding key | Dùng MetaMask để ký identity/key binding, không export private key ví |
 
@@ -151,6 +153,7 @@ Admin dashboard hiện là bảng quan sát demo server store, chưa phải admi
 | Backend tests | Có pytest cho flow chính | Chưa cover hết endpoint/lỗi cạnh | Thêm negative tests |
 | Frontend syntax | Có `node --check` | Chưa có browser automation test | Playwright tests |
 | Crypto tests | Có test gián tiếp qua demo | Chưa có vector test độc lập | Test vectors cho HKDF/AES-GCM packet |
+| Manual decrypt script | Có `scripts/decrypt_message.mjs` | Chưa có fixture/test tự động cho nhiều packet | Thêm test vector cố định cho script |
 | Security tests | Có plaintext rejection/admin 403 | Chưa fuzz packet, tamper header | Fuzz packet validation |
 | Performance tests | Chưa có | Chưa đo latency/throughput | Benchmark login/encrypt/decrypt/relay |
 | Cross-browser tests | Chưa có | Chưa test Chrome/Edge/Firefox/Mobile | Browser matrix |
@@ -241,7 +244,7 @@ Still missing:
 - production UI/UX
 - full Signal/Double Ratchet
 - key recovery
+- encrypted key export/import
 - hardening against XSS/endpoint compromise
 - deployment, CI/CD, monitoring
 ```
-

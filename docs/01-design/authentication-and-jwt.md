@@ -23,6 +23,8 @@ Implemented behavior:
 - The server stores only a SHA-256 hash of each refresh token.
 - Logout revokes matching refresh sessions and deletes the refresh cookie.
 - WebSocket authentication is performed with an auth frame after the socket opens.
+- Username `admin` is treated as admin by default through `ADMIN_USERNAMES`.
+- Admin users are routed to the server dashboard; normal users are routed to chat/key inspection.
 
 ## Important Distinction
 
@@ -76,7 +78,7 @@ Current access JWT claims:
 
 Long-lived tokens must not be stored in `localStorage`.
 
-The current demo stores only the short-lived access token in `sessionStorage` to make the classroom demo survive a page refresh. A stricter build can keep the access token only in memory and rely on the refresh cookie for session renewal.
+The current demo stores only the short-lived access token in `sessionStorage` to make the classroom demo survive a page refresh. On load, the frontend reads `secure-chat-session` and calls `GET /me`; if the token is invalid, it clears the session and returns to login. A stricter build can keep the access token only in memory and rely on the refresh cookie for session renewal.
 
 The refresh token remains hidden from normal JavaScript through the HttpOnly cookie flag.
 
@@ -122,4 +124,5 @@ The message remains ciphertext; WebSocket authentication does not give the serve
 - Do not log raw access or refresh tokens.
 - Keep auth events useful but non-sensitive.
 - Treat JWT as authorization only; never use JWT contents as proof that a contact key is trusted.
+- A JWT alone is not enough for manual decryption; decrypting a stored packet also needs the correct browser device private key and the peer public key from the server store.
 - Production work should replace the small hand-written JWT helper with a reviewed JWT library and stronger key-management practices.

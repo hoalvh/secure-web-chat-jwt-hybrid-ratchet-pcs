@@ -1,14 +1,14 @@
 # Results
 
-This document summarizes benchmark and security experiment results. Replace `TBD` with actual measured values when experiments are run.
+This document summarizes benchmark and security experiment results for the current runnable MVP. Values marked `not yet measured` are intentionally left open until a real benchmark or screenshot/evidence run is recorded.
 
 ## Result Summary Table
 
 | Variant | Attack scenario | Messages exposed | Replay accepted | Tamper accepted | PCS recovery window | Notes |
 |---|---|---:|---:|---:|---:|---|
-| Plain relay | Server compromise | TBD | N/A | N/A | N/A | Insecure baseline |
-| Current Web Crypto demo | Server compromise | TBD | TBD | TBD | TBD | FastAPI + JSON store + browser E2EE |
-| Future full DH ratchet | State compromise | TBD | TBD | TBD | TBD | Expected recovery after rekey |
+| Plain relay | Server compromise | All plaintext if stored | N/A | N/A | N/A | Insecure baseline for explanation only |
+| Current Web Crypto demo | Server compromise | 0 plaintext rows expected | Lab endpoint only | AES-GCM expected reject | PCS metric only | FastAPI + JSON store + browser E2EE |
+| Future full DH ratchet | State compromise | not yet implemented | not yet implemented | not yet implemented | not yet implemented | Expected recovery after real DH ratchet |
 
 ## Raw Data
 
@@ -36,30 +36,30 @@ Results are split into:
 
 | Run | Stored plaintext visible | Private keys visible | Ciphertext rows visible | Notes |
 |---|---:|---:|---:|---|
-| Baseline plain relay | TBD | TBD | TBD | Expected insecure baseline |
-| Current E2EE demo | TBD | TBD | TBD | Expected ciphertext-only JSON store |
+| Baseline plain relay | yes, by design | N/A | N/A | Explanation baseline, not the current app |
+| Current E2EE demo | no | no | yes | JSON store/admin dashboard show hashes, public keys, nonce, ciphertext, tag |
 
 ### Stolen JWT
 
 | Run | API access allowed | Ciphertext fetched | Plaintext decrypted | Reason |
 |---|---:|---:|---:|---|
-| Stolen access JWT | TBD | TBD | TBD | JWT should not include browser private keys |
+| Stolen access JWT | yes, until expiry | yes, if API request is authorized | no without browser private key | JWT should not include browser private keys |
 
 ### Replay and Tamper
 
 | Run | Replay accepted | Tamper accepted | Failure reason | Notes |
 |---|---:|---:|---|---|
-| Replay old packet | TBD | N/A | Duplicate packet ID/message counter | TBD |
-| Modify ciphertext | N/A | TBD | AES-GCM tag failure | TBD |
-| Modify associated data | N/A | TBD | AES-GCM tag failure | TBD |
+| Replay old packet | lab/demo check expected reject | N/A | Duplicate packet ID/message counter | Needs recorded endpoint output |
+| Modify ciphertext | N/A | expected reject | AES-GCM tag failure | Needs recorded endpoint output |
+| Modify associated data | N/A | expected reject | AES-GCM tag failure | Needs recorded endpoint output |
 
 ### Post-Compromise Security
 
 | Variant | Compromise at message | Rekey at message | Future messages exposed before rekey | Future messages exposed after rekey | Notes |
 |---|---:|---:|---:|---:|---|
-| Symmetric ratchet only | TBD | N/A | TBD | N/A | Expected no recovery without new entropy |
-| Current PCS lab metric | TBD | TBD | TBD | TBD | Demonstration metric, not full Double Ratchet proof |
-| Future full DH ratchet | TBD | TBD | TBD | TBD | Expected recovery after DH ratchet |
+| Symmetric ratchet only | not yet measured | N/A | not yet measured | N/A | Expected no recovery without new entropy |
+| Current PCS lab metric | 3 | 5 | 2 before rekey in demo metric | 0 after rekey in demo metric | Demonstration metric, not full Double Ratchet proof |
+| Future full DH ratchet | not implemented | not implemented | not implemented | not implemented | Expected recovery after DH ratchet |
 
 ## Required Performance Result Tables
 
@@ -67,18 +67,18 @@ Results are split into:
 
 | Benchmark | p50 latency | p95 latency | throughput | Notes |
 |---|---:|---:|---:|---|
-| Login with Argon2id | TBD | TBD | TBD | Parameters should be recorded |
-| JWT verification | TBD | TBD | TBD | HMAC-SHA256 in current FastAPI app |
-| Refresh token | TBD | TBD | TBD | Includes JSON store lookup |
+| Login with Argon2id | not yet measured | not yet measured | not yet measured | Parameters should be recorded |
+| JWT verification | not yet measured | not yet measured | not yet measured | HMAC-SHA256 in current FastAPI app |
+| Refresh token | not yet measured | not yet measured | not yet measured | Includes JSON store lookup |
 
 ### Messaging and Crypto
 
 | Benchmark | p50 latency | p95 latency | bytes overhead | Notes |
 |---|---:|---:|---:|---|
-| Encrypt one message | TBD | TBD | TBD | Browser Web Crypto |
-| Decrypt one message | TBD | TBD | TBD | Browser Web Crypto |
-| PCS rekey metric | TBD | TBD | TBD | Lab metric |
-| Relay ciphertext packet | TBD | TBD | TBD | Server does not decrypt |
+| Encrypt one message | not yet measured | not yet measured | not yet measured | Browser Web Crypto |
+| Decrypt one message | not yet measured | not yet measured | not yet measured | Browser Web Crypto and Node helper can verify one stored packet |
+| PCS rekey metric | not latency-based | not latency-based | N/A | Lab metric |
+| Relay ciphertext packet | not yet measured | not yet measured | not yet measured | Server does not decrypt |
 
 ## Interpretation Rules
 

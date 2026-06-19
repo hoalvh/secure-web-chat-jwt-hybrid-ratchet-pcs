@@ -17,6 +17,7 @@ Use this checklist before pushing the repository so another machine can clone an
 | `scripts/run_dev.ps1` | Starts the local server |
 | `scripts/test.ps1` | Runs backend tests |
 | `scripts/reset_demo_data.ps1` | Removes local demo JSON data |
+| `scripts/decrypt_message.mjs` | Manually decrypts one stored message with an exported browser device key for evidence/debugging |
 
 ## Do Not Push
 
@@ -28,6 +29,8 @@ data/demo_store.json
 server*.log
 *.err.log
 .env
+tmp/
+private/
 *.jwk
 *.key
 *.pem
@@ -75,11 +78,22 @@ http://127.0.0.1:8000
 
 Expected result:
 
-- `.\scripts\test.ps1` reports `2 passed`.
+- `.\scripts\test.ps1` reports the backend test suite passing. The current suite has 4 tests.
 - `/health` returns `ok: true`.
 - Browser can register `alice` and `bob`.
 - Alice can send an encrypted message to Bob.
-- Security Lab -> Server DB shows ciphertext only.
+- User UI shows chat plus key/fingerprint information.
+- Login as `admin` opens the admin dashboard.
+- Admin dashboard shows hashes/public keys/ciphertext, not plaintext/private keys.
+
+Optional manual decrypt evidence:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+Keep the exported device JSON in `tmp/` or another ignored path.
 
 ## Reset Before Demo
 

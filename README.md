@@ -2,7 +2,7 @@
 
 A Cryptography course project about secure one-to-one web chat. The project separates normal web authentication from end-to-end message encryption: JWT authorizes access to the server, while message confidentiality depends on browser-side device keys and per-message encryption keys.
 
-The current repository is a runnable course prototype. It is intentionally smaller than the original full-stack plan so the crypto flow, threat model, and Security Lab scenarios can be demonstrated from one local FastAPI server.
+The current repository is a runnable course prototype. It is intentionally smaller than the original full-stack plan so the crypto flow, threat model, admin evidence, and lab endpoints can be demonstrated from one local FastAPI server.
 
 This is not a production secure messenger and not a full Signal implementation.
 
@@ -14,7 +14,7 @@ Institution: Ho Chi Minh City University of Technology and Engineering (HCM-UTE)
 |---|---|---|
 | Ly Van Huu Hoa | [@hoalvh](https://github.com/hoalvh) | Application security, authentication, backend relay, Security Lab backend |
 | Le Quang Minh | [@hnhat1234](https://github.com/hnhat1234) | E2EE protocol, key schedule, ratchet, protocol testing |
-| Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend security UX, client state, evaluation UI |
+| Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend security UX, client state, admin/demo UI |
 
 Team responsibilities and execution plan: [docs/00-project/team-and-execution-plan.md](docs/00-project/team-and-execution-plan.md)
 
@@ -33,6 +33,7 @@ The current MVP includes:
 - User chat UI focused on contacts, encrypted chat, and key fingerprints.
 - Admin dashboard for server-side demo records: password hashes, refresh-token hashes, public device keys, ciphertext, and security events.
 - Security Lab backend endpoints for replay, tamper, key substitution, and PCS rekey metrics.
+- Manual Node decrypt helper for checking one stored ciphertext against an exported browser private key.
 - Pytest tests for the FastAPI backend and ciphertext-only storage rules.
 
 ## Run Locally
@@ -106,6 +107,15 @@ Normal user accounts create or reuse a local browser device key and publish only
 
 The admin dashboard should show password hashes, refresh-token hashes, public keys, ciphertext, nonce, tag, and routing metadata. It should not show plaintext message content or private key material.
 
+Manual decrypt check:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+The device JSON must come from the browser IndexedDB device record and must contain `privateKeyJwk`. Keep that file under `tmp/` or another ignored/private path.
+
 ## Architecture
 
 ```text
@@ -133,7 +143,7 @@ JWT is used for server access. It does not encrypt or decrypt messages. Private 
 
 | Layer | Current technology | Role |
 |---|---|---|
-| Backend | Python + FastAPI | Auth, refresh sessions, device/key APIs, ciphertext relay, lab endpoints |
+| Backend | Python + FastAPI | Auth, refresh sessions, device/key APIs, ciphertext relay, admin and lab endpoints |
 | Frontend | HTML + CSS + vanilla JavaScript | Login, user chat UI, admin dashboard, browser crypto |
 | Auth | Argon2id, HMAC-SHA256 JWT, HttpOnly refresh cookie | Password login and API/WebSocket authorization |
 | Realtime | FastAPI WebSocket plus REST polling fallback | Notify recipient clients about new encrypted packets |
@@ -214,7 +224,7 @@ secure-web-chat/
 | `apps/server/` | Current FastAPI backend and backend tests |
 | `apps/web/` | Current browser UI, Web Crypto E2EE logic, and styling |
 | `docs/` | Project docs, design decisions, protocol notes, evaluation plan |
-| `scripts/` | Setup, test, run, and reset helpers for Windows/PowerShell |
+| `scripts/` | Setup, test, run, reset, and manual decrypt helpers |
 
 ## Documentation
 
@@ -233,7 +243,9 @@ secure-web-chat/
 | [Key Schedule and Ratchet](docs/01-design/key-schedule-and-ratchet.md) | Root keys, chain keys, message keys, ratchet limitations |
 | [Security UX](docs/01-design/security-ux.md) | UI states for encryption, warnings, and lab evidence |
 | [Experiment Plan](docs/02-evaluation/experiment-plan.md) | Server compromise, stolen JWT, replay, tamper, FS, PCS |
+| [Code Flow and Runtime Explanation](docs/02-evaluation/code-flow-runtime-explanation.md) | Detailed runtime flow, browser/server storage, token structure, admin/user split |
 | [Risks, Goals, Solution, Architecture, Demo](docs/02-evaluation/risks-goals-solution-architecture-demo.md) | Clear risks-to-goals mapping, architecture, demo results, and commands |
+| [Project Gaps and Limitations](docs/02-evaluation/project-gaps-and-limitations.md) | Honest list of missing production features and next milestones |
 
 ## Tests
 
@@ -243,7 +255,7 @@ Run:
 python -m pytest apps/server/tests
 ```
 
-The current backend tests cover register/login, device public key storage, ciphertext-only message storage, lab dump behavior, and rejection of message packets that contain plaintext.
+The current backend tests cover register/login, device public key storage, ciphertext-only message storage, lab dump behavior, rejection of message packets that contain plaintext, admin-dashboard authorization, and contact-list filtering.
 
 ## Security Constraints
 

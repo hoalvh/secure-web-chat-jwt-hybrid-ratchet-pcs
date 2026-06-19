@@ -15,7 +15,7 @@ Stack hiện tại:
 | Client crypto | Browser Web Crypto API | ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 fingerprint |
 | Client storage | IndexedDB, sessionStorage | Private device key, safety/fingerprint state, access-token session |
 | Server storage | Local JSON demo store | User hash, refresh-token hash, public key, ciphertext packet, events |
-| Test | Pytest, FastAPI TestClient | Backend API and security-boundary tests |
+| Test/tooling | Pytest, FastAPI TestClient, Node Web Crypto helper | Backend API/security-boundary tests and manual ciphertext decrypt checks |
 
 ## 1. Risks to Security Goals
 
@@ -32,6 +32,7 @@ Storage risks là nhóm rủi ro liên quan đến dữ liệu được lưu tr�
 | Refresh token leak từ store | Attacker đọc session store | Không lưu refresh token dạng rõ | Server chỉ lưu SHA-256 hash của refresh token |
 | Private key bị upload lên server | Client gửi nhầm private JWK | Private key phải ở browser | `/devices` reject public_key_jwk nếu có field private `d` |
 | Browser IndexedDB bị đọc bởi XSS/malware | Script độc trên browser lấy private key hoặc state | Không claim chống full browser compromise | Tài liệu nêu rõ limitation; private key vẫn tốt hơn lưu ở server nhưng không chống được browser đã bị chiếm |
+| Private key export để decrypt tay bị commit nhầm | File export chứa `privateKeyJwk.d` | Private key export chỉ dùng tạm, không đưa lên server/git | `.gitignore` bỏ qua `tmp/`, docs nhắc giữ file export ngoài repo |
 
 Security goals từ storage risks:
 
@@ -294,6 +295,7 @@ Pytest dùng FastAPI TestClient để kiểm tra security boundary:
 | Plaintext rejection | Packet chứa plaintext bị reject HTTP 400 |
 | Admin dashboard authorization | User thường bị 403, admin xem được dashboard |
 | Contact list filtering | User thường không thấy admin account trong contact list |
+| Manual decrypt helper | Kiểm tra một ciphertext thật chỉ decrypt được khi có đúng private key browser |
 
 ## 4. Demonstration Results
 
@@ -309,6 +311,14 @@ Check frontend JavaScript syntax:
 
 ```powershell
 node --check apps\web\src\app.js
+node --check scripts\decrypt_message.mjs
+```
+
+Manual decrypt check:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
 ```
 
 Run server:
@@ -324,20 +334,22 @@ http://127.0.0.1:8000
 http://127.0.0.1:8000/admin
 ```
 
-### 4.2. Verified Test Results
+### 4.2. Verification Targets
 
-Kết quả kiểm thử sau khi thêm admin dashboard:
+Khi môi trường Python/venv đầy đủ, backend test suite hiện có 4 test chính:
 
 ```text
-apps\server\tests\test_app.py .... [100%]
-4 passed, 1 warning
+test_register_login_device_and_ciphertext_lab_flow
+test_server_rejects_plaintext_in_message_packet
+test_admin_dashboard_exposes_server_side_demo_records_to_admin_only
+test_normal_user_contact_list_hides_admin_accounts
 ```
 
 JavaScript syntax check:
 
 ```text
 node --check apps\web\src\app.js
-OK
+node --check scripts\decrypt_message.mjs
 ```
 
 Smoke test server:
@@ -367,7 +379,7 @@ Smoke test admin page:
 GET /admin
 StatusCode = 200
 HasAdminPanel = true
-Has old Security Lab panel text = false
+Normal user UI remains chat/key-focused
 ```
 
 ### 4.3. Results by Security Goal
@@ -391,16 +403,17 @@ Has old Security Lab panel text = false
 
 | Demo item | Expected result | Actual verified status |
 |---|---|---|
-| Register/login users | Access JWT returned, refresh cookie set | Verified by tests |
-| Register admin | `admin` has `is_admin = true` | Verified by smoke test |
+| Register/login users | Access JWT returned, refresh cookie set | Covered by backend test suite |
+| Register admin | `admin` has `is_admin = true` | Covered by admin-dashboard flow |
 | User chat view | Normal users see chat and key/fingerprint only | Implemented in `appPanel` |
-| Admin dashboard view | Admin sees server storage tables | Verified by `/admin/dashboard` smoke test |
-| Non-admin dashboard block | Normal user gets HTTP 403 | Verified by pytest |
-| Contact list filtering | Normal user does not see admin account | Verified by pytest |
-| Password storage | Password hash visible, raw password absent | Verified by pytest |
-| Ciphertext storage | Server stores ciphertext/nonce/tag | Verified by message test |
-| Plaintext guard | Packet containing plaintext rejected | Verified by pytest |
-| JS syntax | Frontend app parses successfully | Verified by `node --check` |
+| Admin dashboard view | Admin sees server storage tables | Covered by `/admin/dashboard` flow |
+| Non-admin dashboard block | Normal user gets HTTP 403 | Covered by backend test suite |
+| Contact list filtering | Normal user does not see admin account | Covered by backend test suite |
+| Password storage | Password hash visible, raw password absent | Covered by backend test suite |
+| Ciphertext storage | Server stores ciphertext/nonce/tag | Covered by message test case |
+| Plaintext guard | Packet containing plaintext rejected | Covered by backend test suite |
+| Manual decrypt helper | Stored packet can be checked with correct exported browser private key | Implemented by `scripts/decrypt_message.mjs` |
+| JS syntax | Frontend app and decrypt helper parse successfully | Verified by `node --check` |
 
 ### 4.5. Discussion
 
@@ -411,6 +424,7 @@ Kết quả demo cho thấy project đạt mục tiêu chính của một secure
 3. User thường chỉ dùng chức năng chat và xem key/fingerprint, không có quyền xem dashboard server.
 4. JWT và E2EE được tách rõ: JWT dùng cho quyền gọi API; browser private key và Web Crypto dùng cho quyền đọc message.
 5. Backend có test cho các boundary quan trọng: không lưu plaintext, không mở dashboard admin cho user thường, không đưa admin vào contact list user thường.
+6. Có thể kiểm tra độc lập một ciphertext bằng `scripts/decrypt_message.mjs` khi có đúng private key browser, giúp xác nhận thuật toán Web Crypto khớp với packet server lưu.
 
 ### 4.6. Limitations
 

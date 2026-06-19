@@ -26,10 +26,10 @@ The web application, local storage, UI, and server setup are included to support
 | E2EE protocol | Deep | Browser Web Crypto ECDH P-256, HKDF-SHA256, AES-GCM |
 | Key schedule and ratchet | Deep enough for course demo | Per-message derivation plus PCS lab metric |
 | Threat model | Deep | Server compromise, JWT theft, replay/tamper, key substitution, XSS limits |
-| Security Lab | Deep | FastAPI lab endpoints and browser lab UI |
+| Security Lab / admin evidence | Deep | FastAPI lab endpoints plus admin dashboard evidence; normal user UI stays focused on chat and keys |
 | Authentication and JWT | Secure MVP | Argon2id, HMAC-SHA256 JWT, refresh cookie |
 | Storage | Demo correctness | Local JSON store under `data/`, not production database |
-| Frontend UI | Demo-ready security UX | HTML/CSS/vanilla JS with badges and lab output |
+| Frontend UI | Demo-ready security UX | HTML/CSS/vanilla JS with user chat/key inspector and admin dashboard |
 | Deployment | Local reproducible setup | Run one FastAPI app locally |
 | Scalability | Design awareness only | Out of current scope |
 
@@ -48,7 +48,9 @@ The following are in scope:
 - Client-side private keys in IndexedDB.
 - Fingerprint display.
 - Key-change warning.
-- Security Lab attack simulations.
+- Security Lab attack simulations through backend endpoints.
+- Admin dashboard evidence for server-side hashes, public keys, ciphertext, and events.
+- Manual decrypt helper for verifying one ciphertext with an exported browser device key.
 - Basic performance/security evidence.
 - Clear documentation and reproducible demo setup.
 
@@ -65,7 +67,7 @@ The following are out of scope for the current MVP:
 - Push notifications.
 - File sharing.
 - Full-text message search.
-- Complex admin dashboards.
+- Production-grade admin console with search/filter/pagination/export.
 - OAuth/social login.
 - MFA.
 - Account recovery workflow.
@@ -86,6 +88,8 @@ The current MVP uses a local JSON demo store. It supports:
 - Security event logs.
 
 This store is useful for the Security Lab because it is easy to inspect and prove that plaintext/private keys are absent.
+
+The admin dashboard reads from the same store and intentionally exposes only server-side demo records: password hashes, refresh-session hashes, public keys, ciphertext, routing metadata, and security events.
 
 The current MVP does not implement:
 
@@ -154,4 +158,6 @@ Future extensions can include:
 - PostgreSQL persistence with migrations.
 - React/TypeScript UI refactor.
 - Browser automation tests.
+- Admin dashboard filtering/export.
+- Manual decrypt test vectors.
 - Formal verification of protocol properties.

@@ -2,7 +2,7 @@
 
 This folder is organized as a small documentation set rather than a flat list of notes.
 
-The current runnable MVP uses Python FastAPI, HTML/CSS/vanilla JavaScript, Browser Web Crypto, IndexedDB, and a local JSON demo store. Larger React/TypeScript/PostgreSQL plans are documented only as future expansion where mentioned.
+The current runnable MVP uses Python FastAPI, HTML/CSS/vanilla JavaScript, Browser Web Crypto, IndexedDB, and a local JSON demo store. The user UI is chat plus key/fingerprint inspection; admin UI is a server dashboard for hashes, public keys, ciphertext, and events. Larger React/TypeScript/PostgreSQL plans are documented only as future expansion where mentioned.
 
 ## 00. Project
 
@@ -24,9 +24,9 @@ Security and protocol design documents.
 |---|---|
 | [Threat Model](01-design/threat-model.md) | Assets, trust boundaries, attacker scenarios, and expected protections |
 | [Authentication and JWT](01-design/authentication-and-jwt.md) | Login, password hashing, JWT, refresh token, and WebSocket auth design |
-| [Device Identity and Key Binding](01-design/device-identity-and-key-binding.md) | Device keys, signed prekeys, safety numbers, and key-change handling |
-| [E2EE Protocol Design](01-design/e2ee-protocol-design.md) | Signal-inspired encrypted messaging protocol and packet format |
-| [Key Schedule and Ratchet](01-design/key-schedule-and-ratchet.md) | Root keys, chain keys, message keys, symmetric ratchet, and DH ratchet |
+| [Device Identity and Key Binding](01-design/device-identity-and-key-binding.md) | Browser device keys, public key binding, IndexedDB private key storage, and key-change handling |
+| [E2EE Protocol Design](01-design/e2ee-protocol-design.md) | Current P-256/HKDF/AES-GCM encrypted messaging protocol and packet format |
+| [Key Schedule and Ratchet](01-design/key-schedule-and-ratchet.md) | Root keys, chain keys, message keys, simplified ratchet, and PCS limits |
 | [Security UX](01-design/security-ux.md) | UI states that make encryption, verification, warnings, and recovery visible |
 
 ## 02. Evaluation
@@ -36,8 +36,10 @@ Experiment and benchmark planning.
 | Document | Purpose |
 |---|---|
 | [Experiment Plan](02-evaluation/experiment-plan.md) | Server compromise, stolen JWT, replay, tamper, key substitution, FS, and PCS experiments |
+| [Code Flow and Runtime Explanation](02-evaluation/code-flow-runtime-explanation.md) | Runtime walkthrough: browser storage, token structure, server JSON store, chat flow, admin flow |
 | [Risks, Goals, Solution, Architecture, Demo](02-evaluation/risks-goals-solution-architecture-demo.md) | Clear explanation of risks-to-goals mapping, architecture, demo architecture, expected results, and commands |
 | [Results Template](02-evaluation/results-template.md) | Tables and interpretation rules for security and performance results |
+| [Project Gaps and Limitations](02-evaluation/project-gaps-and-limitations.md) | Current missing pieces: DB, UI maturity, full Signal/ratchet, recovery, hardening, deployment |
 
 ## Naming Convention
 

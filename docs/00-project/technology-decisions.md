@@ -19,22 +19,22 @@ Detailed scope boundaries are defined in [`project-scope.md`](project-scope.md).
 | Layer | Current decision | Why it fits now |
 |---|---|---|
 | Backend | Python + FastAPI | Small API surface, built-in OpenAPI, easy local run command, good pytest support |
-| Frontend | HTML + CSS + vanilla JavaScript | No build step, easy demo, direct access to Web Crypto and IndexedDB |
+| Frontend | HTML + CSS + vanilla JavaScript | No build step, easy demo, direct access to Web Crypto, IndexedDB, and admin/user UI state |
 | Auth | Argon2id + HMAC-SHA256 JWT + refresh cookie | Demonstrates password hashing, short-lived access tokens, and revocable refresh sessions |
 | Realtime | FastAPI WebSocket plus REST fallback | Shows explicit WebSocket auth while keeping the demo reliable through polling |
 | Server storage | Local JSON store in `data/demo_store.json` | Simple inspectable persistence for course demos and tests |
 | Client crypto | Browser Web Crypto API | Provides reviewed browser primitives for ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 |
 | Client state | IndexedDB | Persists browser private key and safety state across reloads |
-| Tests | Pytest + FastAPI TestClient | Verifies backend auth, device, ciphertext, and lab boundaries |
+| Tests/tools | Pytest + FastAPI TestClient, Node syntax/decrypt helper | Verifies backend auth/device/ciphertext/admin boundaries and allows manual ciphertext decryption checks |
 
 ## 3. Architecture Decision
 
 The project uses a modular layered repository:
 
-- `apps/web/` contains the browser UI, IndexedDB state, and Web Crypto E2EE logic.
+- `apps/web/` contains the browser UI, IndexedDB state, admin dashboard rendering, and Web Crypto E2EE logic.
 - `apps/server/` contains FastAPI routes for auth, device/key APIs, ciphertext relay, WebSocket auth, and lab controls.
 - `docs/` contains design evidence, evaluation notes, and grading artifacts.
-- `scripts/` contains setup, test, run, and reset helpers.
+- `scripts/` contains setup, test, run, reset, and manual decrypt helpers.
 
 Classic MVC is not the main organizing model because the hard part is protocol state: root keys, chain keys, message counters, associated data, replay handling, and compromise-recovery experiments. Keeping server, browser, and protocol documentation separate makes the trust boundary easier to review.
 
@@ -48,7 +48,7 @@ Reasons:
 
 - No bundler or package install is required to run the demo.
 - Web Crypto and IndexedDB are available directly in the browser.
-- The app surface is small: login/register, contact selection, encrypted chat, and Security Lab controls.
+- The app surface is small: login/register, contact selection, encrypted chat, key/fingerprint inspection, and admin dashboard.
 - It keeps the course demo easy to inspect during presentation.
 
 Trade-off: plain JavaScript gives less type safety and less component structure than React/TypeScript. If the UI grows, React + TypeScript + Vite would be a reasonable next step.
@@ -59,7 +59,7 @@ The current UI uses a single CSS file at `apps/web/src/styles.css`.
 
 Reasons:
 
-- Security badges and lab panels are easier to keep stable in a small static stylesheet.
+- Chat, key-inspector, and admin-dashboard states are easier to keep stable in a small static stylesheet.
 - There is no Tailwind build step.
 - The screenshots remain predictable for report evidence.
 
@@ -103,7 +103,7 @@ Stored data includes:
 - Encrypted message packets.
 - Security Lab events.
 
-This is intentionally inspectable for the server-compromise lab. It is not a production database. PostgreSQL plus migrations can replace it later when the team needs stronger relational constraints and multi-user durability.
+This is intentionally inspectable for the server-compromise/admin-dashboard demo. It is not a production database. PostgreSQL plus migrations can replace it later when the team needs stronger relational constraints and multi-user durability.
 
 ### WebSocket
 
@@ -195,6 +195,17 @@ Reasonable next steps:
 - Scripted Security Lab evidence under `docs/02-evaluation/` or a future dedicated evidence folder.
 - Benchmark outputs can be added later when real benchmark scripts exist.
 
+### Manual Decrypt Helper
+
+`scripts/decrypt_message.mjs` mirrors the browser key schedule with Node Web Crypto:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+It needs the server JSON store plus a browser device export containing `privateKeyJwk`. This is a debugging/evidence tool only; exported private keys must stay outside git.
+
 ## 9. Future Expansion Path
 
 | Future item | Why it may be useful | Current status |
@@ -203,7 +214,7 @@ Reasonable next steps:
 | Tailwind CSS | Faster repeated security-state styling | Not used by current MVP |
 | PostgreSQL | Durable relational storage and constraints | Not used by current MVP |
 | Prisma or SQLAlchemy | Reproducible schema/migrations | Reserved for later |
-| Playwright | Browser evidence for warnings/lab states | Planned |
+| Playwright | Browser evidence for chat/key/admin states | Planned |
 | k6 or similar | Scenario benchmarks | Planned |
 
 ## 10. Decision Summary
@@ -217,7 +228,7 @@ Reasonable next steps:
 | Argon2id | Strong password hashing for login | Needs tuned parameters and dependency install |
 | HMAC-SHA256 JWT | Simple local authorization | Production should use stronger key management and a JWT library |
 | Web Crypto P-256/HKDF/AES-GCM | Reviewed browser primitives | Not a full Signal algorithm set |
-| Pytest | Fast backend verification | Browser UI still needs automated tests |
+| Pytest + Node helper | Fast backend verification and manual ciphertext decrypt checks | Browser UI still needs automated tests |
 
 ## 11. Reference Points
 

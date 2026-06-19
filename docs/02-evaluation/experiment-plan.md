@@ -41,9 +41,10 @@ Each experiment should include:
 | Need | Current choice | Reason |
 |---|---|---|
 | Backend security-boundary tests | Pytest + FastAPI TestClient | Already verifies auth/device/message/lab rules |
-| Manual browser evidence | Local browser at `http://127.0.0.1:8000` | Current UI has no build step and is easy to demo |
+| Manual browser evidence | Local browser at `http://127.0.0.1:8000` | Current user UI has chat/key inspection and admin UI has server dashboard |
+| Manual ciphertext decrypt | `node scripts\decrypt_message.mjs` | Confirms stored packet decrypts only with the correct browser private key |
 | Raw evidence storage | `docs/02-evaluation/` until real scripts exist | Keeps result notes close to the evaluation docs |
-| Future browser tests | Playwright | Good next step for warning and lab-state verification |
+| Future browser tests | Playwright | Good next step for chat/key/admin-state verification |
 | Future API benchmarks | k6 or a Python/httpx script | Current backend is FastAPI, not Fastify |
 
 ## Security Claims to Check
@@ -52,6 +53,7 @@ Each experiment should include:
 |---|---|
 | Server cannot read plaintext | Server compromise database/store inspection |
 | JWT does not decrypt messages | Stolen JWT fetch-and-decrypt attempt |
+| Stored ciphertext can be independently checked | Manual decrypt helper with exported browser device key |
 | AES-GCM detects modification | Tamper attack |
 | Packet IDs detect duplicates | Replay attack |
 | Safety UX detects key substitution | Malicious key directory simulation |
@@ -93,6 +95,34 @@ screenshot folder if UI evidence is needed
 ```
 
 The current repository does not keep empty experiment folders. Add a dedicated evidence folder only when real scripts, screenshots, or raw outputs exist.
+
+## Current Demo Commands
+
+Run the server:
+
+```powershell
+.\scripts\run_dev.ps1
+```
+
+Run backend boundary tests:
+
+```powershell
+.\scripts\test.ps1
+```
+
+Run frontend/decrypt syntax checks:
+
+```powershell
+node --check apps\web\src\app.js
+node --check scripts\decrypt_message.mjs
+```
+
+List and manually decrypt stored packets:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
 
 ## Initial Metrics
 

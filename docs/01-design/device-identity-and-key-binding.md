@@ -17,7 +17,7 @@ The current implementation does not use Ed25519 identity signatures, signed prek
 - Show a fingerprint for contacts.
 - Warn when a known contact fingerprint changes.
 - Make unverified and changed-key states visible in the chat UI.
-- Keep the key-substitution scenario reproducible through the Security Lab.
+- Keep the key-substitution scenario reproducible through backend lab endpoints and visible fingerprint state.
 
 ## Risk
 
@@ -86,15 +86,23 @@ The current browser stores:
 
 This keeps private keys out of the backend. It does not protect against XSS, malicious extensions, or a fully compromised browser.
 
+For manual decrypt evidence, a developer may export the IndexedDB device record to an ignored file such as `tmp/alice-device.json` and run:
+
+```powershell
+node scripts\decrypt_message.mjs --device .\tmp\alice-device.json --index 0
+```
+
+That export contains `privateKeyJwk` and must never be committed.
+
 ## Key-Change Handling
 
 When a saved contact fingerprint differs from the fetched fingerprint, the UI must show `Key changed`.
 
-Current Security Lab behavior:
+Current backend/demo behavior:
 
 - `/lab/key-substitution` records a key-substitution event.
-- The browser generates a fake public key during the lab action.
-- The UI compares fingerprints and shows a warning.
+- The user UI compares fingerprints when opening a contact and shows a warning if the saved value changes.
+- The admin dashboard can show public-key records and security events for evidence.
 
 Future UX can pause sending until the user explicitly accepts or verifies the new fingerprint.
 

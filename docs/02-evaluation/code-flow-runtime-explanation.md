@@ -11,6 +11,7 @@ File này giải thích ngắn gọn nhưng chi tiết cách code hiện tại h
 | `apps/web/src/app.js` | Toàn bộ frontend logic: session restore, IndexedDB, Web Crypto, chat, WebSocket, admin dashboard render |
 | `apps/web/src/styles.css` | Giao diện user chat và admin dashboard |
 | `apps/server/tests/test_app.py` | Test backend cho auth, ciphertext-only storage, admin dashboard permission |
+| `scripts/decrypt_message.mjs` | Script Node Web Crypto để decrypt tay một ciphertext đã lưu nếu có đúng private key browser |
 | `data/demo_store.json` | File dữ liệu local do server tự tạo khi chạy demo |
 
 Luồng tổng quát:
@@ -665,9 +666,43 @@ startAutoRefresh()
 
 Vì vậy F5 không mất session ngay, và message có thể tự cập nhật kể cả khi WebSocket không quan sát được ổn định.
 
-## 8. Luồng admin dashboard
+## 8. Luồng decrypt tay bằng script ngoài
 
-### 8.1. Điều kiện thành admin
+Muốn giải mã tay một message đã lưu, cần đủ các dữ liệu sau:
+
+| Cần gì | Lấy ở đâu | Ghi chú |
+|---|---|---|
+| `data/demo_store.json` | Server JSON store | Chứa packet, header, nonce, ciphertext, tag và public key peer |
+| Browser device private key | IndexedDB export của user sender hoặc recipient | File export phải có `privateKeyJwk.d` |
+| Đúng message cần decrypt | `--index`, `--message-id`, hoặc `--sender/--recipient/--number` | Sai message hoặc sai route sẽ fail |
+| Thuật toán đúng | `scripts/decrypt_message.mjs` | Dùng P-256 ECDH, HKDF-SHA256, AES-GCM giống frontend |
+
+Lệnh:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+Luồng bên trong script:
+
+```text
+Đọc server store
+-> chọn message
+-> đọc privateKeyJwk từ device JSON
+-> tìm public key của peer trong store.devices
+-> ECDH P-256 derive shared secret
+-> HKDF root/chain/message key với label giống frontend
+-> AES-GCM decrypt bằng nonce + ciphertext + tag + canonical(header)
+-> nếu đúng key/header/tag: in plaintext
+-> nếu sai: báo ok=false
+```
+
+Private key export chỉ dùng để debug/evidence và phải để trong `tmp/` hoặc nơi bị git ignore.
+
+## 9. Luồng admin dashboard
+
+### 9.1. Điều kiện thành admin
 
 Mặc định:
 
@@ -689,7 +724,7 @@ Có thể cấu hình nhiều admin:
 $env:ADMIN_USERNAMES="admin,teacher"
 ```
 
-### 8.2. Frontend admin flow
+### 9.2. Frontend admin flow
 
 ```text
 Login/register thành công
@@ -713,7 +748,7 @@ Admin dashboard render:
 | Refresh token hashes | User, session id, refresh token hash, expiry, revoked |
 | Security events | Event type, actor, time, detail |
 
-### 8.3. Backend admin flow
+### 9.3. Backend admin flow
 
 `GET /admin/dashboard`:
 
@@ -739,7 +774,7 @@ Admin dashboard không trả:
 - Browser private key.
 - Plaintext message.
 
-## 9. API map nhanh
+## 10. API map nhanh
 
 | API | Ai gọi | Mục đích |
 |---|---|---|
@@ -758,9 +793,9 @@ Admin dashboard không trả:
 | `GET /admin/dashboard` | Admin | Xem server-side hash/ciphertext/public key/events |
 | `WS /ws` | User chat | Notify message mới realtime |
 
-Các `/lab/...` endpoint vẫn còn ở backend cho demo/security experiment, nhưng UI user hiện tại đã được rút gọn, không còn Security Lab panel.
+Các `/lab/...` endpoint vẫn còn ở backend cho demo/security experiment, nhưng UI user hiện tại đã được rút gọn, chỉ còn chat và key/fingerprint view.
 
-## 10. Những gì đã làm được
+## 11. Những gì đã làm được
 
 ### Backend
 
@@ -811,10 +846,11 @@ Các `/lab/...` endpoint vẫn còn ở backend cho demo/security experiment, nh
 - README đã cập nhật demo flow mới.
 - Có report risks/goals/architecture/demo results.
 - Có test backend cho admin dashboard và user filtering.
-- `node --check apps/web/src/app.js` pass.
-- `pytest apps/server/tests` pass.
+- Có script decrypt tay `scripts/decrypt_message.mjs`.
+- Test backend hiện có 4 test chính trong `apps/server/tests/test_app.py`.
+- Lệnh kiểm tra nên chạy trước khi nộp: `node --check apps/web/src/app.js`, `node --check scripts/decrypt_message.mjs`, và `.\scripts\test.ps1`.
 
-## 11. Giới hạn hiện tại
+## 12. Giới hạn hiện tại
 
 - Đây là course prototype, chưa phải production secure messenger.
 - Chưa phải full Signal protocol.
@@ -823,8 +859,9 @@ Các `/lab/...` endpoint vẫn còn ở backend cho demo/security experiment, nh
 - IndexedDB private key không chống được XSS/malware/browser extension độc hại.
 - JSON file store chỉ phù hợp demo local, chưa phải DB production.
 - Access JWT đang tự implement bằng HMAC trong demo; production nên dùng thư viện JWT chuẩn và cấu hình secret nghiêm túc hơn.
+- Script decrypt tay cần export private key ra file tạm, nên chỉ dùng cho demo/evidence và không được commit file đó.
 
-## 12. Câu nhớ nhanh khi thuyết trình
+## 13. Câu nhớ nhanh khi thuyết trình
 
 ```text
 JWT dùng để biết ai được gọi server.

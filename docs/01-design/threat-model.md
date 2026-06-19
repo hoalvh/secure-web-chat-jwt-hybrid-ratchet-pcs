@@ -13,6 +13,7 @@ This document defines the security assumptions, protected assets, trust boundari
 - Ciphertext message packets.
 - Public key bundles.
 - Security event logs and benchmark results.
+- Admin dashboard output.
 
 ## Trust Boundaries
 
@@ -41,7 +42,7 @@ Each scenario should include attacker capability, expected impact, mitigation, a
 | Public key substitution must be visible | Fingerprint and key-change UI | Users/evaluators can see when a contact key changes |
 | Temporary state compromise should be measurable | Symmetric key evolution plus PCS lab metric | Experiments can explain exposure before and after rekey |
 | Replay/tamper should be rejected | AES-GCM associated data and packet IDs | Modified packets fail authentication or replay checks |
-| Server store compromise should be demonstrable | JSON ciphertext store | Security Lab can inspect stored rows and show ciphertext-only data |
+| Server store compromise should be demonstrable | JSON ciphertext store and admin dashboard | Admin/lab evidence can inspect stored rows and show ciphertext-only data |
 | Browser risk should be explicit | IndexedDB threat note and XSS limitation | Browser-side key storage has limits that must be documented |
 
 ## Server Trust Boundary
@@ -60,6 +61,7 @@ The server is not trusted for:
 - Private key custody.
 - Long-term public key honesty without user-visible verification.
 - Protection against database/store inspection in the server-compromise experiment.
+- Protection against admin visibility of server-side records; the dashboard is intentionally limited to hashes, public keys, ciphertext, and metadata.
 
 The backend therefore focuses on auth, validation, storage, and relay rather than message decryption.
 

@@ -12,7 +12,7 @@ Ho Chi Minh City University of Technology and Engineering (HCM-UTE)
 |---:|---|---|---|
 | 1 | Ly Van Huu Hoa | [@hoalvh](https://github.com/hoalvh) | Application Security, Authentication, Backend Relay, Security Lab Backend |
 | 2 | Le Quang Minh | [@hnhat1234](https://github.com/hnhat1234) | Cryptographic Protocol, Key Schedule, Ratchet, Protocol Testing |
-| 3 | Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend Security UX, Client State, Evaluation UI |
+| 3 | Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend Security UX, Client State, Admin/Demo UI |
 
 ## 3. Author Line
 
@@ -35,7 +35,7 @@ Maintainers: @hoalvh, @hnhat1234, @siberlly
 |---|---|---|
 | Application Security and Security Lab Backend | Ly Van Huu Hoa | FastAPI auth, JWT, refresh sessions, device/key APIs, WebSocket auth, ciphertext relay, lab endpoints |
 | Cryptographic Protocol and Ratchet Core | Le Quang Minh | Web Crypto E2EE packet format, key schedule, AEAD, simplified ratchet, PCS explanation, protocol tests |
-| Frontend Security UX and Evaluation UI | Tran Quoc Truong | Browser UI, IndexedDB client state, chat UX, security badges, Security Lab dashboard, screenshots |
+| Frontend Security UX and Admin/Demo UI | Tran Quoc Truong | Browser UI, IndexedDB client state, chat UX, key inspector, admin dashboard, screenshots |
 
 ## 5. Responsibility Matrix
 
@@ -56,7 +56,7 @@ Maintainers: @hoalvh, @hnhat1234, @siberlly
 | Chat UI | Integrate | Integrate | Lead |
 | Fingerprint/key-change UI | Review | Review | Lead |
 | Security Lab backend | Lead | Integrate | Integrate |
-| Security Lab frontend | Integrate | Review | Lead |
+| Admin/evidence frontend | Integrate | Review | Lead |
 | Security experiments | Lead attack cases | Lead crypto cases | Lead UI evidence |
 | Benchmarks | Auth/server metrics | Crypto metrics | UI/evidence metrics |
 | Final report sections | Threat model, auth, lab backend | Protocol, key schedule, PCS | UI/UX, screenshots, evaluation UI |
@@ -190,7 +190,8 @@ Main deliverables:
 - Fingerprint display.
 - Key-change warning.
 - Replay/tamper/decryption failure states.
-- Security Lab dashboard.
+- User chat key/fingerprint inspector.
+- Admin dashboard for server-side hashes/ciphertext/public keys.
 - Screenshot-ready evaluation views.
 
 Validation checklist:
@@ -199,7 +200,7 @@ Validation checklist:
 - Private keys are not sent to the backend.
 - Security states are visible with text, not color only.
 - Key-change and decrypt-failure warnings are prominent.
-- Lab results are readable and suitable for report screenshots.
+- Admin/lab evidence is readable and suitable for report screenshots.
 - UI works after page reload.
 - API and protocol contract changes are reflected in documentation.
 
@@ -252,7 +253,7 @@ Validation checklist:
 | Replay/tamper demo | Shared |
 | Forward secrecy explanation | Le Quang Minh |
 | PCS metric | Le Quang Minh |
-| Lab dashboard and screenshots | Tran Quoc Truong |
+| Admin dashboard and screenshots | Tran Quoc Truong |
 | Benchmark/result tables | Shared |
 
 ## 9. Branch Workflow

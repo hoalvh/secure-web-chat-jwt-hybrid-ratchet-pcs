@@ -41,6 +41,8 @@ These files are safe and useful to commit:
 - `scripts/**`
 - `.gitignore`
 
+`scripts/decrypt_message.mjs` is safe to commit because it contains only the decrypt algorithm and CLI logic. The device JSON passed to it is not safe to commit.
+
 ## Do Not Commit
 
 Never commit:
@@ -52,9 +54,11 @@ Never commit:
 - Raw access tokens or refresh tokens.
 - Private device keys.
 - IndexedDB exports containing private JWK field `d`.
+- Device JSON files used with `scripts/decrypt_message.mjs`.
 - Ratchet state dumps.
 - Real user data.
 - `data/demo_store.json` from local runs.
+- `tmp/` exports, screenshots with secrets, or copied browser storage dumps.
 - `server*.log` or `*.err.log`.
 - `.venv/` or other virtual environments.
 - Generated `node_modules/`.
@@ -88,6 +92,7 @@ Recommended checklist:
 - Confirm `.env` does not appear in `git status`.
 - Confirm no private keys are present.
 - Confirm no local JSON store or logs are staged.
+- Confirm no `tmp/*.json` device exports or IndexedDB private-key dumps are staged.
 - Confirm README links work.
 - Commit documentation and scaffold first.
 

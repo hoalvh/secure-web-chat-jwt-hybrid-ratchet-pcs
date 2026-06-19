@@ -39,6 +39,8 @@ message-key:{message_number}
 
 Different labels are used so the same bytes are not reused for multiple roles.
 
+The same labels are used by `scripts/decrypt_message.mjs`, so manual decryption checks the real app algorithm rather than a separate ad-hoc flow.
+
 ## Symmetric Ratchet
 
 Conceptually:
@@ -60,7 +62,7 @@ old root key + fresh DH secret -> new root key and new chain keys
 
 This is what gives post-compromise recovery: if an attacker temporarily learns current symmetric state but later loses access, a fresh DH step can introduce entropy the attacker does not know.
 
-In the current runnable MVP, the full DH ratchet message flow is not implemented. The Security Lab endpoint `/lab/state-compromise` reports PCS-style metrics for a controlled scenario:
+In the current runnable MVP, the full DH ratchet message flow is not implemented. The backend endpoint `/lab/state-compromise` reports PCS-style metrics for a controlled scenario:
 
 ```text
 compromise_at_message = 3
@@ -104,6 +106,7 @@ The project should add deterministic tests or scripted checks for:
 - Header changes cause AES-GCM decrypt failure.
 - Replayed packet IDs are rejected by the lab/client logic.
 - PCS lab metrics show a recovery point after DH rekey.
+- `scripts/decrypt_message.mjs` decrypts a real stored packet when given the correct exported browser private key.
 
 ## Future Work
 

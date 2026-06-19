@@ -96,6 +96,10 @@ function prettyFingerprint(hex) {
   return hex.match(/.{1,4}/g)?.slice(0, 12).join(" ") ?? hex;
 }
 
+function shortFingerprint(hex) {
+  return prettyFingerprint(hex).split(" ").slice(0, 3).join(" ");
+}
+
 function packetKey(packet) {
   const header = packet.header || {};
   return [
@@ -390,7 +394,9 @@ async function ensureDevice() {
       fingerprint: record.fingerprint,
     },
   });
-  setText("#deviceBadge", `Device ${prettyFingerprint(record.fingerprint).split(" ").slice(0, 3).join(" ")}`);
+  setText("#deviceBadge", `Device ${shortFingerprint(record.fingerprint)}`);
+  setText("#localDeviceId", record.deviceId);
+  setText("#localKeyFingerprint", prettyFingerprint(record.fingerprint));
 }
 
 async function getKeyBundle(username) {
@@ -409,21 +415,28 @@ async function loadUsers() {
   list.innerHTML = "";
   if (!data.users.length) {
     const empty = document.createElement("div");
-    empty.className = "user-item";
-    empty.textContent = "No other users yet";
+    empty.className = "empty-state";
+    empty.textContent = "No contacts found";
     list.append(empty);
     return;
   }
   for (const user of data.users) {
-    const item = document.createElement("div");
+    const item = document.createElement("button");
+    item.type = "button";
     item.className = "user-item";
+    item.addEventListener("click", () => openContact(user.username));
+
+    const text = document.createElement("span");
     const name = document.createElement("strong");
     name.textContent = user.username;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = "Open";
-    button.addEventListener("click", () => openContact(user.username));
-    item.append(name, button);
+    const meta = document.createElement("small");
+    meta.textContent = user.created_at ? `Joined ${new Date(user.created_at).toLocaleDateString()}` : "Ready";
+    text.append(name, meta);
+
+    const action = document.createElement("span");
+    action.className = "user-action";
+    action.textContent = "Chat";
+    item.append(text, action);
     list.append(item);
   }
 }
@@ -600,7 +613,10 @@ async function openContact(username) {
     }
   }
   setText("#fingerprintView", prettyFingerprint(current));
+  setText("#keyOwner", clean);
+  setText("#keyDevice", state.contactBundle.device_id);
   setText("#conversationTitle", `${state.user.username} to ${clean}`);
+  setText("#contactMeta", `Conversation ${conversationId(state.user.id, clean)} - message keys derived locally`);
   $("#messageInput").disabled = false;
   $("#sendButton").disabled = false;
   $("#cryptoBadge").className = "badge neutral";
@@ -626,6 +642,12 @@ async function refreshMessages() {
   state.lastMessages = data.messages.sort((a, b) => a.server_received_at.localeCompare(b.server_received_at));
   const messageList = $("#messageList");
   messageList.innerHTML = "";
+  if (!state.lastMessages.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state conversation-empty";
+    empty.textContent = "No messages in this conversation";
+    messageList.append(empty);
+  }
   for (const message of state.lastMessages) {
     const packet = message.packet;
     let body = "";
@@ -641,7 +663,8 @@ async function refreshMessages() {
     bubble.className = `message ${packet.header.sender_user_id === state.user.id ? "me" : ""}`;
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${packet.header.sender_user_id} #${packet.header.message_number} ${failed ? "decrypt failed" : "encrypted"}`;
+    const actor = packet.header.sender_user_id === state.user.id ? "You" : packet.header.sender_user_id;
+    meta.textContent = `${actor} - #${packet.header.message_number} - ${failed ? "decrypt failed" : "decrypted locally"}`;
     const text = document.createElement("div");
     text.className = "body";
     text.textContent = body;

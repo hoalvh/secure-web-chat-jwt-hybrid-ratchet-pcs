@@ -12,8 +12,9 @@ The current MVP UI supports:
 - One-to-one encrypted chat.
 - Fingerprint display.
 - Key-change warning.
-- Replay/tamper/decrypt-failure lab states.
-- Security Lab experiments.
+- Decrypt-failure state in the chat.
+- Admin dashboard evidence for server-side hashes, public keys, ciphertext, and events.
+- Backend lab endpoints for replay/tamper/key-substitution/PCS experiments.
 
 Future product work such as avatars, file attachments, push notifications, global search, and production mobile polish is out of scope.
 
@@ -24,8 +25,8 @@ The interface should help users and evaluators understand:
 - Whether a conversation is encrypted.
 - Whether a contact key is unverified or changed.
 - Whether a message failed to decrypt.
-- Whether a replay or tamper event was detected.
-- Whether the Security Lab shows server-side plaintext exposure or ciphertext-only storage.
+- Whether server-side storage contains only ciphertext and hashes.
+- Whether backend lab endpoints report replay/tamper/key-substitution/PCS results.
 - Whether the PCS rekey metric indicates recovery after a compromise point.
 
 ## Required States
@@ -40,6 +41,7 @@ The interface should help users and evaluators understand:
 - `Tamper detected`
 - `WS auth ok`
 - `DH_REKEY_RECOVERED`
+- `Admin dashboard loaded`
 
 ## Current UI Stack Decisions
 
@@ -48,7 +50,7 @@ The interface should help users and evaluators understand:
 | UI framework | Plain HTML + vanilla JavaScript | No build step; direct Web Crypto and IndexedDB access |
 | Styling | `apps/web/src/styles.css` | Small predictable stylesheet for demo screenshots |
 | State storage | `sessionStorage` and IndexedDB | Short-lived access token survives refresh; private device key stays client-side |
-| Lab output | JSON rendered in `<pre>` | Easy to inspect and paste into report evidence |
+| Admin/lab output | Admin tables and backend JSON responses | Easy to inspect and paste into report evidence |
 | Verification | Manual browser demo plus backend pytest | Browser automation is future work |
 
 React, TypeScript, Tailwind, and Playwright remain reasonable future choices, but they are not required to run the current MVP.
@@ -59,18 +61,19 @@ React, TypeScript, Tailwind, and Playwright remain reasonable future choices, bu
 |---|---|
 | Auth panel | Register/login and status messages |
 | Topbar | Current session, device badge, refresh/logout |
-| Sidebar | Contact list, manual open, fingerprint/trust display |
+| Contacts panel | Contact list and manual open username |
 | Chat panel | Encrypted messages and decrypt failures |
-| Security Lab panel | Server DB, stolen JWT, replay, tamper, key change, PCS rekey actions |
+| Key inspector | Local device fingerprint and contact public-key/fingerprint details |
+| Admin dashboard | Server path, counts, password hashes, refresh-token hashes, public keys, ciphertext, security events |
 
 ## Security-State Design Rules
 
 - Never show only color for critical warnings; use text labels too.
 - Key-change warnings should be visually stronger than normal status updates.
 - A decrypt failure should not expose sensitive raw keys or plaintext.
-- The Security Lab may show technical JSON, but the normal chat view should stay understandable.
+- The admin dashboard may show technical JSON and hashes, but the normal chat view should stay understandable.
 - Verified and unverified states must be visually distinct.
-- PCS/rekey results should be visible as structured lab output.
+- PCS/rekey results should be visible through backend lab output or report evidence.
 
 ## Evidence Targets
 
@@ -80,7 +83,7 @@ The final report should capture:
 - Device/fingerprint state.
 - Alice sending an encrypted message.
 - Bob decrypting the message locally.
-- Server DB lab showing ciphertext-only rows.
+- Admin dashboard showing ciphertext-only rows.
 - Stolen JWT lab showing server access without plaintext decryption.
 - Replay rejected.
 - Tamper rejected by AES-GCM.
@@ -97,4 +100,5 @@ When Playwright or another browser test runner is added, test:
 - Key-change warning after simulated key substitution.
 - Tampered packet decrypt failure.
 - Replayed packet rejection.
-- Security Lab button outputs.
+- Admin dashboard tables.
+- Backend lab endpoint outputs.

@@ -34,7 +34,7 @@ Current server-side role:
 - Store and relay encrypted packets.
 - Reject plaintext packet submissions.
 - Reject device registrations that include private JWK material.
-- Provide Security Lab endpoints.
+- Provide admin/dashboard evidence and Security Lab endpoints.
 
 The server does not decrypt message ciphertext.
 
@@ -52,6 +52,29 @@ The current MVP uses a simple public key directory:
 8. The server stores and relays only the encrypted packet.
 
 This is enough for the course demo but does not implement full X3DH, signed prekeys, skipped-message keys, or full Double Ratchet behavior.
+
+## Manual Decryption Requirements
+
+To decrypt one stored ciphertext outside the browser, the same inputs and algorithm are required:
+
+- Server JSON store containing the selected packet and peer public device key.
+- Local browser device private key JWK for either the sender or recipient.
+- Packet header exactly as stored.
+- Packet `nonce`, `ciphertext`, and `tag`.
+- Same derivation labels used by the frontend:
+  - `root-from-ecdh`
+  - `chain:v1:{conversation_id}:{sender}->{recipient}`
+  - `next-chain-key:{step}`
+  - `message-key:{message_number}`
+
+Current helper:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+If any input differs, AES-GCM authentication fails instead of returning plaintext.
 
 ## Message Packet
 
@@ -99,7 +122,7 @@ Replay handling in the current browser/lab flow tracks packet IDs derived from:
 conversation_id:sender_user_id:recipient_user_id:message_number
 ```
 
-The Security Lab uses this to demonstrate duplicate packet detection. A production design would need a more complete replay window and skipped-message handling.
+The backend lab endpoints use this to demonstrate duplicate packet detection. A production design would need a more complete replay window and skipped-message handling.
 
 ## Key Substitution Handling
 
