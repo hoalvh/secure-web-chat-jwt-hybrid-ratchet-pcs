@@ -13,7 +13,7 @@
           <div class="brand-mark">SC</div>
           <div>
             <h1>Secure Web Chat</h1>
-            <p>JWT auth, client-side E2EE, ratchet demo, and Security Lab.</p>
+            <p>JWT auth, client-side E2EE chat, and server-side admin view.</p>
           </div>
         </div>
 
@@ -37,11 +37,12 @@
       <section class="app-layout" id="appPanel" hidden>
         <header class="topbar">
           <div>
-            <span class="eyebrow">Course prototype</span>
+            <span class="eyebrow">User chat</span>
             <h2 id="sessionTitle">Encrypted chat</h2>
           </div>
           <div class="topbar-actions">
             <span class="badge ok" id="deviceBadge">No device</span>
+            <span class="badge neutral" id="syncBadge">Live idle</span>
             <button type="button" id="refreshButton" class="secondary">Refresh</button>
             <button type="button" id="logoutButton" class="ghost">Logout</button>
           </div>
@@ -80,21 +81,125 @@
             <button type="submit" id="sendButton" disabled>Send</button>
           </form>
         </section>
+      </section>
 
-        <section class="lab-panel">
+      <section class="admin-layout" id="adminPanel" hidden>
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Admin</span>
+            <h2 id="adminTitle">Server dashboard</h2>
+          </div>
+          <div class="topbar-actions">
+            <span class="badge neutral" id="adminStatus">Ready</span>
+            <button type="button" id="adminRefreshButton" class="secondary">Refresh</button>
+            <button type="button" id="adminLogoutButton" class="ghost">Logout</button>
+          </div>
+        </header>
+
+        <section class="admin-section">
           <div class="section-title">
-            <h3>Security Lab</h3>
-            <span class="badge neutral" id="labBadge">Ready</span>
+            <h3>Storage</h3>
+            <span id="adminStoragePath" class="muted"></span>
           </div>
-          <div class="lab-actions">
-            <button type="button" id="serverDumpButton">Server DB</button>
-            <button type="button" id="jwtButton">Stolen JWT</button>
-            <button type="button" id="replayButton">Replay</button>
-            <button type="button" id="tamperButton">Tamper</button>
-            <button type="button" id="keySubButton">Key change</button>
-            <button type="button" id="pcsButton">PCS rekey</button>
+          <div id="adminStats" class="stats-grid"></div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-title">
+            <h3>Users and password hashes</h3>
           </div>
-          <pre id="labOutput" class="lab-output"></pre>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Password hash</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="adminUsersBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-title">
+            <h3>Stored ciphertext</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Message</th>
+                  <th>Route</th>
+                  <th>Nonce</th>
+                  <th>Ciphertext</th>
+                  <th>Tag</th>
+                  <th>Received</th>
+                </tr>
+              </thead>
+              <tbody id="adminMessagesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-title">
+            <h3>Device public keys</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Device</th>
+                  <th>Fingerprint</th>
+                  <th>Public key</th>
+                </tr>
+              </thead>
+              <tbody id="adminDevicesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-title">
+            <h3>Refresh token hashes</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Session</th>
+                  <th>Token hash</th>
+                  <th>Expires</th>
+                  <th>Revoked</th>
+                </tr>
+              </thead>
+              <tbody id="adminSessionsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="admin-section">
+          <div class="section-title">
+            <h3>Security events</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Actor</th>
+                  <th>Time</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="adminEventsBody"></tbody>
+            </table>
+          </div>
         </section>
       </section>
     </main>

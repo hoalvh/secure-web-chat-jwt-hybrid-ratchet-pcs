@@ -143,7 +143,7 @@ h1 {
 .brand-row p,
 .eyebrow,
 .status-log,
-.lab-output,
+.muted,
 .key-panel pre {
   color: var(--muted);
 }
@@ -177,11 +177,18 @@ h1 {
 
 .app-layout {
   display: grid;
-  grid-template-columns: 280px minmax(360px, 1fr) 330px;
+  grid-template-columns: 280px minmax(360px, 1fr);
   grid-template-rows: auto minmax(0, calc(100vh - 130px));
   grid-template-areas:
-    "top top top"
-    "side chat lab";
+    "top top"
+    "side chat";
+  gap: 16px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.admin-layout {
+  display: grid;
   gap: 16px;
   max-width: 1440px;
   margin: 0 auto;
@@ -189,8 +196,7 @@ h1 {
 
 .topbar,
 .sidebar,
-.chat-panel,
-.lab-panel {
+.chat-panel {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -217,11 +223,11 @@ h1 {
   min-width: 0;
 }
 
-.lab-panel {
-  grid-area: lab;
+.admin-section {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
   padding: 16px;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
 }
 
@@ -312,7 +318,6 @@ h1 {
 }
 
 .key-panel pre,
-.lab-output,
 .message-list,
 .status-log {
   font-size: 13px;
@@ -361,39 +366,92 @@ h1 {
   border-top: 1px solid var(--line);
 }
 
-.lab-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 14px 0;
-}
-
-.lab-actions button {
-  padding: 0 10px;
-}
-
-.lab-output {
-  min-height: 260px;
-  overflow: auto;
-  margin: 0;
-  padding: 12px;
-  background: #f8fafc;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
 [hidden] {
   display: none !important;
 }
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.stat-item {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.stat-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.stat-item strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+}
+
+.table-wrap {
+  width: 100%;
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 900px;
+  font-size: 13px;
+}
+
+th,
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #f1f5f9;
+  color: #344054;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td code {
+  display: block;
+  max-width: 460px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #1f2937;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
 @media (max-width: 1120px) {
   .app-layout {
-    grid-template-columns: 260px minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(520px, 1fr);
+    grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-rows: auto minmax(520px, 1fr);
     grid-template-areas:
       "top top"
-      "side lab"
-      "chat chat";
+      "side chat";
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -404,12 +462,11 @@ h1 {
 
   .app-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto minmax(520px, 1fr) auto;
+    grid-template-rows: auto auto minmax(520px, 1fr);
     grid-template-areas:
       "top"
       "side"
-      "chat"
-      "lab";
+      "chat";
   }
 
   .topbar,
@@ -421,5 +478,9 @@ h1 {
 
   .message {
     width: 100%;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
   }
 }

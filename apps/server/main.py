@@ -48,6 +48,11 @@ JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "secure-chat-web")
 ACCESS_TTL_SECONDS = int(os.getenv("JWT_ACCESS_TOKEN_TTL_SECONDS", "900"))
 REFRESH_TTL_SECONDS = int(os.getenv("REFRESH_TOKEN_TTL_SECONDS", "604800"))
 REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "secure_chat_refresh")
+ADMIN_USERNAMES = {
+    username.strip().lower()
+    for username in os.getenv("ADMIN_USERNAMES", "admin").split(",")
+    if username.strip()
+}
 
 
 def now_iso() -> str:
@@ -82,6 +87,14 @@ def normalize_username(username: str) -> str:
             detail="Username may contain letters, numbers, dot, dash and underscore",
         )
     return clean
+
+
+def username_is_admin(user_id: str) -> bool:
+    return user_id.strip().lower() in ADMIN_USERNAMES
+
+
+def user_is_admin(user: dict[str, Any]) -> bool:
+    return bool(user.get("is_admin")) or username_is_admin(user["id"])
 
 
 def initial_store() -> dict[str, Any]:
@@ -233,6 +246,7 @@ def public_user(user_id: str) -> dict[str, Any]:
     return {
         "id": user["id"],
         "username": user["username"],
+        "is_admin": user_is_admin(user),
         "created_at": user["created_at"],
     }
 
@@ -247,6 +261,12 @@ def current_user(authorization: str | None = Header(default=None)) -> dict[str, 
         if user_id not in store.data["users"]:
             raise HTTPException(status_code=401, detail="User no longer exists")
         return store.data["users"][user_id]
+
+
+def require_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if not user_is_admin(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user
 
 
 def record_event(event_type: str, actor_user_id: str | None, detail: dict[str, Any]) -> None:
@@ -372,6 +392,7 @@ def register(payload: AuthRequest, response: Response) -> dict[str, Any]:
             "id": username,
             "username": username,
             "password_hash": hash_password(payload.password),
+            "is_admin": username_is_admin(username),
             "created_at": now_iso(),
             "updated_at": now_iso(),
         }
@@ -433,12 +454,99 @@ def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
 @app.get("/users")
 def users(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     with store.lock:
+        current_is_admin = user_is_admin(user)
         items = [
             public_user(user_id)
             for user_id in sorted(store.data["users"])
             if user_id != user["id"]
+            and (current_is_admin or not user_is_admin(store.data["users"][user_id]))
         ]
     return {"users": items}
+
+
+@app.get("/admin/dashboard")
+def admin_dashboard(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with store.lock:
+        users = [
+            {
+                "id": item["id"],
+                "username": item["username"],
+                "is_admin": user_is_admin(item),
+                "password_hash": item["password_hash"],
+                "created_at": item["created_at"],
+                "updated_at": item.get("updated_at"),
+            }
+            for item in sorted(store.data["users"].values(), key=lambda row: row["username"])
+        ]
+        devices = [
+            {
+                "id": item["id"],
+                "user_id": item["user_id"],
+                "device_label": item["device_label"],
+                "fingerprint": item["fingerprint"],
+                "identity_public_key": item["identity_public_key"],
+                "created_at": item["created_at"],
+                "last_seen_at": item.get("last_seen_at"),
+                "revoked_at": item.get("revoked_at"),
+            }
+            for item in sorted(store.data["devices"].values(), key=lambda row: row["id"])
+        ]
+        messages = []
+        for item in store.data["messages"]:
+            packet = item["packet"]
+            header = packet.get("header", {})
+            messages.append(
+                {
+                    "id": item["id"],
+                    "sender_user_id": item["sender_user_id"],
+                    "recipient_user_id": item["recipient_user_id"],
+                    "conversation_id": header.get("conversation_id"),
+                    "message_number": header.get("message_number"),
+                    "algorithm": packet.get("algorithm"),
+                    "nonce": packet.get("nonce"),
+                    "ciphertext": packet.get("ciphertext"),
+                    "tag": packet.get("tag"),
+                    "packet": packet,
+                    "plaintext": None,
+                    "plaintext_exposed": False,
+                    "server_received_at": item["server_received_at"],
+                    "delivered_at": item.get("delivered_at"),
+                }
+            )
+        refresh_sessions = [
+            {
+                "id": item["id"],
+                "user_id": item["user_id"],
+                "refresh_token_hash": item["refresh_token_hash"],
+                "created_at": item["created_at"],
+                "expires_at": item["expires_at"],
+                "revoked_at": item.get("revoked_at"),
+            }
+            for item in sorted(store.data["refresh_sessions"].values(), key=lambda row: row["created_at"])
+        ]
+        events = copy.deepcopy(store.data["security_events"][-100:])
+
+    record_event(
+        "ADMIN_DASHBOARD_VIEWED",
+        admin["id"],
+        {"visible_users": len(users), "visible_messages": len(messages)},
+    )
+    return {
+        "admin": public_user(admin["id"]),
+        "storage": {
+            "store_file": str(STORE_FILE),
+            "users": len(users),
+            "devices": len(devices),
+            "messages": len(messages),
+            "refresh_sessions": len(refresh_sessions),
+            "security_events": len(events),
+        },
+        "users": users,
+        "devices": devices,
+        "messages": messages,
+        "refresh_sessions": refresh_sessions,
+        "security_events": events,
+    }
 
 
 @app.post("/devices")
@@ -722,4 +830,9 @@ if WEB_DIR.exists():
 
 @app.get("/")
 def index() -> FileResponse:
+    return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/admin")
+def admin_index() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")

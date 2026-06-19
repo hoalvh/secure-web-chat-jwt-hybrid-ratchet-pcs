@@ -30,7 +30,9 @@ The current MVP includes:
 - One-to-one ciphertext relay over REST and WebSocket notification.
 - Browser-side ECDH, HKDF-SHA256, and AES-GCM encryption/decryption.
 - AES-GCM associated data over the canonical packet header.
-- Security Lab scenarios for server compromise, stolen JWT, replay, tamper, key substitution, and PCS rekey metrics.
+- User chat UI focused on contacts, encrypted chat, and key fingerprints.
+- Admin dashboard for server-side demo records: password hashes, refresh-token hashes, public device keys, ciphertext, and security events.
+- Security Lab backend endpoints for replay, tamper, key substitution, and PCS rekey metrics.
 - Pytest tests for the FastAPI backend and ciphertext-only storage rules.
 
 ## Run Locally
@@ -84,22 +86,25 @@ To reset local demo data before recording or presenting:
 Suggested demo accounts:
 
 ```text
+admin / pass1234
 alice / pass1234
 bob   / pass1234
 ```
 
-Register both users in the browser. Each account creates or reuses a local browser device key and publishes only the public key to the server.
+Register `admin`, `alice`, and `bob` in the browser. Username `admin` is treated as an admin by default. You can override the admin list with `ADMIN_USERNAMES=admin,teacher`.
+
+Normal user accounts create or reuse a local browser device key and publish only the public key to the server. The admin account opens the server dashboard instead of the chat page.
 
 ## Demo Flow
 
-1. Register `alice`.
-2. Register `bob`.
-3. Login as `alice`, open `bob`, and send a message.
-4. Logout, login as `bob`, open `alice`, and refresh.
-5. Confirm Bob decrypts locally in the browser.
-6. Run the Security Lab buttons: Server DB, Stolen JWT, Replay, Tamper, Key change, and PCS rekey.
+1. Register `admin`, then logout.
+2. Register `alice`.
+3. Register `bob`.
+4. Login as `alice`, open `bob`, check Bob's key fingerprint, and send a message.
+5. Logout, login as `bob`, open `alice`, and confirm Bob decrypts locally in the browser.
+6. Logout, login as `admin`, and review the dashboard.
 
-The server lab dump should show ciphertext, nonce, tag, and routing metadata, but no plaintext message content and no private key material.
+The admin dashboard should show password hashes, refresh-token hashes, public keys, ciphertext, nonce, tag, and routing metadata. It should not show plaintext message content or private key material.
 
 ## Architecture
 
@@ -110,7 +115,7 @@ The server lab dump should show ciphertext, nonce, tag, and routing metadata, bu
 | - IndexedDB key   |        WebSocket        | - JWT verification   |
 | - E2EE crypto     | <---------------------> | - Key directory      |
 +-------------------+                         | - Ciphertext relay   |
-          |                                   | - Security Lab APIs  |
+          |                                   | - Admin dashboard    |
           | E2EE ciphertext only              +----------+-----------+
           v                                              |
 +-------------------+                                    |
@@ -129,7 +134,7 @@ JWT is used for server access. It does not encrypt or decrypt messages. Private 
 | Layer | Current technology | Role |
 |---|---|---|
 | Backend | Python + FastAPI | Auth, refresh sessions, device/key APIs, ciphertext relay, lab endpoints |
-| Frontend | HTML + CSS + vanilla JavaScript | Login, chat UI, Security Lab, browser crypto |
+| Frontend | HTML + CSS + vanilla JavaScript | Login, user chat UI, admin dashboard, browser crypto |
 | Auth | Argon2id, HMAC-SHA256 JWT, HttpOnly refresh cookie | Password login and API/WebSocket authorization |
 | Realtime | FastAPI WebSocket plus REST polling fallback | Notify recipient clients about new encrypted packets |
 | Storage | Local JSON store under `data/` | Demo persistence for users, refresh sessions, devices, messages, and lab events |
@@ -177,6 +182,13 @@ POST /lab/tamper
 POST /lab/key-substitution
 POST /lab/state-compromise
 GET  /lab/events
+```
+
+Admin:
+
+```text
+GET  /admin
+GET  /admin/dashboard
 ```
 
 ## Repository Layout

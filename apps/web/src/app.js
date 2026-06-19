@@ -9,6 +9,7 @@ const state = {
   keyBundles: new Map(),
   packetIds: new Set(),
   lastMessages: [],
+  adminData: null,
   ws: null,
   refreshTimer: null,
 };
@@ -19,23 +20,14 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 function setText(selector, value) {
-  $(selector).textContent = value;
-}
-
-function setJson(selector, value) {
-  setText(selector, JSON.stringify(value, null, 2));
+  const element = $(selector);
+  if (element) {
+    element.textContent = value;
+  }
 }
 
 function authLog(message) {
   setText("#authStatus", message);
-}
-
-function labLog(value) {
-  if (typeof value === "string") {
-    setText("#labOutput", value);
-  } else {
-    setJson("#labOutput", value);
-  }
 }
 
 function saveSession() {
@@ -325,6 +317,17 @@ async function submitAuth(mode) {
 
 async function enterApp() {
   $("#authPanel").hidden = true;
+  stopAutoRefresh();
+  if (state.user.is_admin) {
+    $("#appPanel").hidden = true;
+    $("#adminPanel").hidden = false;
+    setText("#adminTitle", `${state.user.username} server dashboard`);
+    await loadAdminDashboard();
+    authLog("");
+    return;
+  }
+
+  $("#adminPanel").hidden = true;
   $("#appPanel").hidden = false;
   setText("#sessionTitle", `${state.user.username} secure session`);
   await ensureDevice();
@@ -425,6 +428,159 @@ async function loadUsers() {
   }
 }
 
+function textOrDash(value) {
+  return value === undefined || value === null || value === "" ? "-" : String(value);
+}
+
+function appendCell(row, value, options = {}) {
+  const cell = document.createElement("td");
+  if (options.code) {
+    const code = document.createElement("code");
+    code.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    cell.append(code);
+  } else {
+    cell.textContent = textOrDash(value);
+  }
+  row.append(cell);
+}
+
+function appendEmptyRow(tbody, colspan, message) {
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = colspan;
+  cell.textContent = message;
+  row.append(cell);
+  tbody.append(row);
+}
+
+function renderAdminStats(storage) {
+  const stats = $("#adminStats");
+  stats.innerHTML = "";
+  const items = [
+    ["Users", storage.users],
+    ["Devices", storage.devices],
+    ["Messages", storage.messages],
+    ["Sessions", storage.refresh_sessions],
+    ["Events", storage.security_events],
+  ];
+  for (const [label, value] of items) {
+    const item = document.createElement("div");
+    item.className = "stat-item";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const number = document.createElement("strong");
+    number.textContent = value;
+    item.append(name, number);
+    stats.append(item);
+  }
+}
+
+function renderAdminUsers(users) {
+  const tbody = $("#adminUsersBody");
+  tbody.innerHTML = "";
+  if (!users.length) {
+    appendEmptyRow(tbody, 4, "No users");
+    return;
+  }
+  for (const user of users) {
+    const row = document.createElement("tr");
+    appendCell(row, user.username);
+    appendCell(row, user.is_admin ? "admin" : "user");
+    appendCell(row, user.password_hash, { code: true });
+    appendCell(row, user.created_at);
+    tbody.append(row);
+  }
+}
+
+function renderAdminMessages(messages) {
+  const tbody = $("#adminMessagesBody");
+  tbody.innerHTML = "";
+  if (!messages.length) {
+    appendEmptyRow(tbody, 6, "No stored ciphertext");
+    return;
+  }
+  for (const message of messages) {
+    const row = document.createElement("tr");
+    appendCell(row, `#${message.message_number || "-"} ${message.conversation_id || message.id}`);
+    appendCell(row, `${message.sender_user_id} -> ${message.recipient_user_id}`);
+    appendCell(row, message.nonce, { code: true });
+    appendCell(row, message.ciphertext, { code: true });
+    appendCell(row, message.tag, { code: true });
+    appendCell(row, message.server_received_at);
+    tbody.append(row);
+  }
+}
+
+function renderAdminDevices(devices) {
+  const tbody = $("#adminDevicesBody");
+  tbody.innerHTML = "";
+  if (!devices.length) {
+    appendEmptyRow(tbody, 4, "No device public keys");
+    return;
+  }
+  for (const device of devices) {
+    const row = document.createElement("tr");
+    appendCell(row, device.user_id);
+    appendCell(row, device.device_label || device.id);
+    appendCell(row, prettyFingerprint(device.fingerprint), { code: true });
+    appendCell(row, device.identity_public_key, { code: true });
+    tbody.append(row);
+  }
+}
+
+function renderAdminSessions(sessions) {
+  const tbody = $("#adminSessionsBody");
+  tbody.innerHTML = "";
+  if (!sessions.length) {
+    appendEmptyRow(tbody, 5, "No refresh sessions");
+    return;
+  }
+  for (const session of sessions) {
+    const row = document.createElement("tr");
+    appendCell(row, session.user_id);
+    appendCell(row, session.id, { code: true });
+    appendCell(row, session.refresh_token_hash, { code: true });
+    appendCell(row, new Date(session.expires_at * 1000).toISOString());
+    appendCell(row, session.revoked_at || "-");
+    tbody.append(row);
+  }
+}
+
+function renderAdminEvents(events) {
+  const tbody = $("#adminEventsBody");
+  tbody.innerHTML = "";
+  if (!events.length) {
+    appendEmptyRow(tbody, 4, "No security events");
+    return;
+  }
+  for (const event of [...events].reverse()) {
+    const row = document.createElement("tr");
+    appendCell(row, event.type);
+    appendCell(row, event.actor_user_id || "-");
+    appendCell(row, event.created_at);
+    appendCell(row, event.detail || {}, { code: true });
+    tbody.append(row);
+  }
+}
+
+function renderAdminDashboard(data) {
+  state.adminData = data;
+  setText("#adminStoragePath", data.storage.store_file);
+  renderAdminStats(data.storage);
+  renderAdminUsers(data.users);
+  renderAdminMessages(data.messages);
+  renderAdminDevices(data.devices);
+  renderAdminSessions(data.refresh_sessions);
+  renderAdminEvents(data.security_events);
+}
+
+async function loadAdminDashboard() {
+  setText("#adminStatus", "Loading");
+  const data = await api("/admin/dashboard");
+  renderAdminDashboard(data);
+  setText("#adminStatus", "Loaded");
+}
+
 async function openContact(username) {
   const clean = username.trim().toLowerCase();
   if (!clean) return;
@@ -504,7 +660,7 @@ function startAutoRefresh() {
     try {
       await refreshMessages();
     } catch (_) {
-      setText("#labBadge", "Auto refresh failed");
+      setText("#syncBadge", "Refresh failed");
     }
   }, 2500);
 }
@@ -545,109 +701,15 @@ function connectWebSocket() {
   ws.addEventListener("message", async (event) => {
     const frame = JSON.parse(event.data);
     if (frame.type === "auth_ok") {
-      setText("#labBadge", "WS auth ok");
+      setText("#syncBadge", "WS auth ok");
     }
     if (frame.type === "encrypted_message" && state.contact) {
       await refreshMessages();
     }
   });
   ws.addEventListener("close", () => {
-    if (state.user) setText("#labBadge", "WS closed");
+    if (state.user) setText("#syncBadge", "WS closed");
   });
-}
-
-function latestPacketForLab() {
-  if (!state.lastMessages.length) {
-    throw new Error("Open a conversation with at least one message first");
-  }
-  return state.lastMessages[state.lastMessages.length - 1];
-}
-
-async function runServerDump() {
-  const data = await api("/lab/messages");
-  labLog({
-    scenario: "SERVER_COMPROMISE_VIEWED",
-    plaintext_exposed: data.messages.some((message) => message.plaintext !== null),
-    rows: data.messages,
-  });
-}
-
-async function runStolenJwt() {
-  const data = await api("/lab/messages");
-  labLog({
-    scenario: "JWT_STOLEN_SIMULATED",
-    server_access_with_token: true,
-    decrypts_plaintext_without_device_key: false,
-    visible_ciphertext_rows: data.messages.length,
-  });
-}
-
-async function runReplay() {
-  const message = latestPacketForLab();
-  const data = await api("/lab/replay", { method: "POST", body: { message_id: message.id } });
-  const replayKey = packetKey(data.packet);
-  const replayRejected = state.packetIds.has(replayKey);
-  labLog({
-    scenario: "REPLAY_REJECTED",
-    message_id: message.id,
-    replay_accepted: !replayRejected,
-    result: replayRejected ? "Replay detected by duplicate message counter" : "Replay would be accepted",
-  });
-}
-
-async function runTamper() {
-  const message = latestPacketForLab();
-  const data = await api("/lab/tamper", { method: "POST", body: { message_id: message.id } });
-  let tamperAccepted = false;
-  let result = "";
-  try {
-    await decryptPacket(data.packet);
-    tamperAccepted = true;
-    result = "Tampered packet decrypted";
-  } catch (error) {
-    result = `Tamper detected: ${error.message || "AES-GCM tag invalid"}`;
-  }
-  labLog({
-    scenario: "TAMPER_REJECTED",
-    message_id: message.id,
-    tamper_accepted: tamperAccepted,
-    result,
-  });
-}
-
-async function runKeySubstitution() {
-  if (!state.contact) {
-    throw new Error("Open a contact first");
-  }
-  await api("/lab/key-substitution", { method: "POST", body: { username: state.contact } });
-  const fakeKeyPair = await crypto.subtle.generateKey(
-    { name: "ECDH", namedCurve: "P-256" },
-    true,
-    ["deriveBits"],
-  );
-  const fakePublic = await crypto.subtle.exportKey("jwk", fakeKeyPair.publicKey);
-  const fakeFingerprint = await fingerprintForPublicKey(fakePublic);
-  const warningShown = fakeFingerprint !== state.contactBundle.fingerprint;
-  $("#trustBadge").className = warningShown ? "badge bad" : "badge ok";
-  setText("#trustBadge", warningShown ? "Key changed" : "Key verified");
-  labLog({
-    scenario: "KEY_SUBSTITUTION_WARNING",
-    original_fingerprint: prettyFingerprint(state.contactBundle.fingerprint),
-    substituted_fingerprint: prettyFingerprint(fakeFingerprint),
-    key_substitution_warning_shown: warningShown,
-  });
-}
-
-async function runPcs() {
-  const data = await api("/lab/state-compromise", {
-    method: "POST",
-    body: {
-      compromise_at_message: 3,
-      rekey_at_message: 5,
-      total_messages: 8,
-    },
-  });
-  labLog({ scenario: "DH_REKEY_RECOVERED", ...data.metrics });
 }
 
 async function logout() {
@@ -666,8 +728,10 @@ async function logout() {
   state.keyBundles.clear();
   state.packetIds.clear();
   state.lastMessages = [];
+  state.adminData = null;
   clearSession();
   $("#appPanel").hidden = true;
+  $("#adminPanel").hidden = true;
   $("#authPanel").hidden = false;
   authLog("Logged out");
 }
@@ -679,7 +743,9 @@ function bind(selector, eventName, handler) {
     } catch (error) {
       const message = error.message || String(error);
       authLog(message);
-      labLog({ error: message });
+      setText("#syncBadge", "Action failed");
+      setText("#adminStatus", "Action failed");
+      console.error(error);
     }
   });
 }
@@ -694,11 +760,7 @@ bind("#loadUsersButton", "click", loadUsers);
 bind("#refreshButton", "click", refreshMessages);
 bind("#openContactButton", "click", () => openContact($("#contactInput").value));
 bind("#messageForm", "submit", sendMessage);
-bind("#serverDumpButton", "click", runServerDump);
-bind("#jwtButton", "click", runStolenJwt);
-bind("#replayButton", "click", runReplay);
-bind("#tamperButton", "click", runTamper);
-bind("#keySubButton", "click", runKeySubstitution);
-bind("#pcsButton", "click", runPcs);
+bind("#adminRefreshButton", "click", loadAdminDashboard);
+bind("#adminLogoutButton", "click", logout);
 
 restoreSession();

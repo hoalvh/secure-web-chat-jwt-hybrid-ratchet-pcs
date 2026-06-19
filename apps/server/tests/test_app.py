@@ -119,3 +119,58 @@ def test_server_rejects_plaintext_in_message_packet() -> None:
         },
     )
     assert response.status_code == 400
+
+
+def test_admin_dashboard_exposes_server_side_demo_records_to_admin_only() -> None:
+    client = TestClient(app)
+    admin_token = register(client, "admin")
+    alice_token = register(client, "alice")
+    register(client, "bob")
+
+    packet = {
+        "version": 1,
+        "algorithm": "ECDH-P-256+HKDF-SHA256+AES-GCM",
+        "header": {
+            "version": 1,
+            "conversation_id": "alice__bob",
+            "sender_user_id": "alice",
+            "recipient_user_id": "bob",
+            "message_number": 1,
+        },
+        "nonce": "nonce",
+        "ciphertext": "ciphertext",
+        "tag": "tag",
+    }
+    message_response = client.post(
+        "/messages",
+        headers=auth_headers(alice_token),
+        json={"packet": packet},
+    )
+    assert message_response.status_code == 200, message_response.text
+
+    forbidden = client.get("/admin/dashboard", headers=auth_headers(alice_token))
+    assert forbidden.status_code == 403
+
+    dashboard = client.get("/admin/dashboard", headers=auth_headers(admin_token))
+    assert dashboard.status_code == 200, dashboard.text
+    data = dashboard.json()
+    alice = next(user for user in data["users"] if user["username"] == "alice")
+    assert alice["is_admin"] is False
+    assert alice["password_hash"]
+    assert "pass1234" not in alice["password_hash"]
+    admin = next(user for user in data["users"] if user["username"] == "admin")
+    assert admin["is_admin"] is True
+    assert data["messages"][0]["ciphertext"] == "ciphertext"
+    assert data["messages"][0]["plaintext"] is None
+
+
+def test_normal_user_contact_list_hides_admin_accounts() -> None:
+    client = TestClient(app)
+    register(client, "admin")
+    alice_token = register(client, "alice")
+    register(client, "bob")
+
+    response = client.get("/users", headers=auth_headers(alice_token))
+    assert response.status_code == 200, response.text
+    usernames = [user["username"] for user in response.json()["users"]]
+    assert usernames == ["bob"]
