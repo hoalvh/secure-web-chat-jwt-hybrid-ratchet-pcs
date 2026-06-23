@@ -1,97 +1,119 @@
 # Device Identity and Key Binding
 
-This document describes how account identity is connected to cryptographic device identity.
+This document describes how account identity is connected to cryptographic device identity in the current browser demo.
 
-## Key Material
+## Current Key Material
 
-- Account ID: server-side user identity.
-- Device ID: server-visible device identifier.
-- Identity key: Ed25519 key pair generated on the client.
-- Signed prekey: X25519 public key signed by the identity key.
-- One-time prekeys: optional X25519 prekeys for asynchronous session setup.
+- Account ID: server-side username.
+- Device ID: server-visible browser device identifier, usually `{username}-browser`.
+- Device key: ECDH P-256 key pair generated in the browser through Web Crypto.
+- Public key bundle: public JWK, device ID, username, fingerprint, and timestamps.
+- Local private key: private JWK stored in IndexedDB.
+
+The current implementation does not use Ed25519 identity signatures, signed prekeys, or one-time prekeys. Those remain future protocol work.
 
 ## Security UX Requirements
 
-- Show a safety number or fingerprint for contacts.
-- Warn when a contact identity key changes.
-- Allow users to verify, continue unverified, or block a conversation.
+- Show a fingerprint for contacts.
+- Warn when a known contact fingerprint changes.
+- Make unverified and changed-key states visible in the chat UI.
+- Keep the key-substitution scenario reproducible through backend lab endpoints and visible fingerprint state.
 
 ## Risk
 
-If the server can replace Bob's public key without Alice noticing, end-to-end encryption can be downgraded into encryption to the attacker. Key verification is therefore part of the security design.
+If the server can replace Bob's public key without Alice noticing, end-to-end encryption can become encryption to the attacker. Key verification is therefore part of the security design, even in a small course demo.
 
-## Technology Decisions
+## Current Technology Decisions
 
-| Decision | Choice | Reason |
+| Decision | Current choice | Reason |
 |---|---|---|
-| Long-term device identity | Ed25519 key pair | A signing key gives each device a stable cryptographic identity |
-| Signed prekey | X25519 key signed by Ed25519 identity key | Enables asynchronous session setup while binding the prekey to the device identity |
-| Public key directory | Fastify + PostgreSQL + Prisma | Server can store and serve public key bundles with ownership constraints |
-| Local private-key storage | IndexedDB through Dexie | Browser-compatible structured persistence for private keys and ratchet state |
-| Safety number | Hash/fingerprint of identity public keys | Gives users a human-checkable way to detect key substitution |
+| Device key agreement | ECDH P-256 via Web Crypto | Built into browsers and sufficient for the current E2EE demo |
+| Public key format | JWK public key | Native Web Crypto import/export format |
+| Public key directory | FastAPI + JSON demo store | Simple key lookup for local demo and lab evidence |
+| Local private-key storage | IndexedDB native API | Browser-compatible persistence without a build dependency |
+| Safety display | SHA-256 fingerprint of public JWK | Human-checkable indicator for key substitution warnings |
 
 ## Account and Device Identity
 
-An account password proves that a user can log in to the server. It does not prove which cryptographic device key should be trusted for encrypted chat.
+An account password proves that a user can log in to the server. It does not prove which cryptographic public key should be trusted for encrypted chat.
 
 The project separates two identities:
 
 | Identity | Controlled by | Purpose |
 |---|---|---|
 | Account identity | Server auth system | Login, session management, routing, device ownership |
-| Device cryptographic identity | Client-generated private key | End-to-end encryption trust and prekey signing |
+| Device cryptographic identity | Client-generated private key | End-to-end encryption and trust state |
 
-In the stolen-JWT experiment, the token may allow temporary server access, but it should not allow message decryption without local private keys.
+In the stolen-JWT experiment, the token may allow temporary server access, but it should not allow message decryption without the local browser private key.
 
-## Ed25519 Identity Key
+## Device Registration
 
-Ed25519 is used for identity signatures because the device needs to sign public prekeys. A recipient can verify that a signed prekey belongs to the claimed long-term identity key.
+The browser calls `POST /devices` with:
 
-The server can publish public keys, but the client still checks whether a signed prekey is bound to the expected identity key. This does not solve first-contact trust by itself, so the UI still needs safety numbers or key-change warnings.
+- `device_id`
+- `device_label`
+- `public_key_jwk`
+- `fingerprint`
 
-## X25519 Prekeys and Ratchet Keys
+The backend rejects a public key JWK if it includes the private-key field `d`. This is the most important server-side device-boundary check in the current MVP.
 
-X25519 is used for key agreement because the project needs Diffie-Hellman outputs for initial session setup and DH ratchet recovery.
+## Key Bundle Lookup
 
-The roles are separated:
+The sender fetches a contact key through:
 
-- Ed25519 signs.
-- X25519 performs key agreement.
-- HKDF derives root, chain, and message keys.
-- AEAD encrypts message payloads.
+```text
+GET /keys/bundle/{username}
+```
 
-## IndexedDB/Dexie for Local Keys
+The response contains:
 
-Device keys and ratchet state must survive page reloads. IndexedDB is the browser storage layer intended for structured client-side data. Dexie makes that storage easier to use safely from TypeScript.
+- Target user ID.
+- Device ID.
+- Public key JWK.
+- Fingerprint.
+- Creation timestamp.
 
-The project should store:
+The server is trusted for availability and routing, but not for silent key honesty. The UI must still expose fingerprints and key changes.
 
-- Private identity key.
-- Signed prekey private key.
-- Ratchet private key.
-- Current root key.
-- Sending and receiving chain state.
-- Verification status for contacts.
+## IndexedDB for Local Keys
 
-The server must store only public key material and ciphertext.
+The current browser stores:
+
+- Device private JWK.
+- Device public JWK.
+- Fingerprint.
+- Per-contact saved fingerprint/safety state.
+
+This keeps private keys out of the backend. It does not protect against XSS, malicious extensions, or a fully compromised browser.
+
+For manual decrypt evidence, a developer may export the IndexedDB device record to an ignored file such as `tmp/alice-device.json` and run:
+
+```powershell
+node scripts\decrypt_message.mjs --device .\tmp\alice-device.json --index 0
+```
+
+That export contains `privateKeyJwk` and must never be committed.
 
 ## Key-Change Handling
 
-When a contact identity key changes, the client must not silently continue as if nothing happened.
+When a saved contact fingerprint differs from the fetched fingerprint, the UI must show `Key changed`.
 
-Required UI decisions:
+Current backend/demo behavior:
 
-- Show a strong warning.
-- Mark the conversation as `Key changed`.
-- Pause sending or require explicit user confirmation.
-- Allow the user to compare the new safety number.
-- Record the event for the Security Lab demonstration.
+- `/lab/key-substitution` records a key-substitution event.
+- The user UI compares fingerprints when opening a contact and shows a warning if the saved value changes.
+- The admin dashboard can show public-key records and security events for evidence.
 
-## Alternative Designs Considered
+Future UX can pause sending until the user explicitly accepts or verifies the new fingerprint.
 
-| Alternative | Why not chosen |
-|---|---|
-| Account password derives E2EE key | Password changes and server login flow would become entangled with message security |
-| Server-generated device keys | Server would know private keys, breaking end-to-end encryption |
-| No key verification UI | Key substitution attack becomes invisible to the user |
-| Multi-device full sync | Valuable, but too large for MVP scope |
+## Future Work
+
+Future protocol work can add:
+
+- Ed25519 identity signatures.
+- Signed prekeys.
+- One-time prekeys.
+- Full X3DH-style initial session setup.
+- QR or numeric safety-number comparison.
+- Key transparency or an append-only audit log.
+- Multi-device identity binding.

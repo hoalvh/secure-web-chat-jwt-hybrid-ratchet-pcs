@@ -1,17 +1,18 @@
 # Experiments
 
-This document tracks the planned security experiments.
+This document tracks the planned security experiments for the current FastAPI/Web Crypto prototype.
 
 ## Scope
 
-Experiments are used to check whether the encrypted chat design behaves as expected under controlled attacker scenarios.
+Experiments check whether the encrypted chat design behaves as expected under controlled attacker scenarios.
 
 Priority work:
 
-- Build the encryption and ratchet core.
-- Simulate attacker capabilities.
-- Measure exposed messages and compromise windows.
-- Compare weaker baselines with the final design.
+- Show that the server stores ciphertext only.
+- Distinguish stolen JWT from E2EE key compromise.
+- Demonstrate replay and tamper rejection.
+- Demonstrate key-substitution warning.
+- Measure or explain forward secrecy and post-compromise recovery limits.
 - Record actual results, not only expected results.
 
 ## Required Experiments
@@ -35,50 +36,49 @@ Each experiment should include:
 - Metrics.
 - Notes and limitations.
 
-## Tooling Decisions
+## Current Tooling Decisions
 
-| Need | Choice | Reason |
+| Need | Current choice | Reason |
 |---|---|---|
-| Protocol unit tests | Vitest | Fast TypeScript tests for packet validation, key schedule, and replay logic |
-| Browser security-flow tests | Playwright | Confirms warnings and lab states appear in the real UI |
-| API micro-benchmarks | autocannon | Quick local load checks for Fastify routes |
-| Scenario benchmarks | k6 | Scripted benchmark flows with reportable metrics |
-| Data storage | `benchmarks/results/` | Keeps raw evidence separate from source code |
-| Attack scripts | `experiments/<scenario>/` | Makes each attack reproducible and easy to grade |
+| Backend security-boundary tests | Pytest + FastAPI TestClient | Already verifies auth/device/message/lab rules |
+| Manual browser evidence | Local browser at `http://127.0.0.1:8000` | Current user UI has chat/key inspection and admin UI has server dashboard |
+| Manual ciphertext decrypt | `node scripts\decrypt_message.mjs` | Confirms stored packet decrypts only with the correct browser private key |
+| Raw evidence storage | `docs/02-evaluation/` until real scripts exist | Keeps result notes close to the evaluation docs |
+| Future browser tests | Playwright | Good next step for chat/key/admin-state verification |
+| Future API benchmarks | k6 or a Python/httpx script | Current backend is FastAPI, not Fastify |
 
 ## Security Claims to Check
 
-Each security property should have at least one experiment:
-
 | Claim | Experiment |
 |---|---|
-| Server cannot read plaintext | Server compromise database inspection |
+| Server cannot read plaintext | Server compromise database/store inspection |
 | JWT does not decrypt messages | Stolen JWT fetch-and-decrypt attempt |
-| AEAD detects modification | Tamper attack |
-| Counters detect duplicate packets | Replay attack |
+| Stored ciphertext can be independently checked | Manual decrypt helper with exported browser device key |
+| AES-GCM detects modification | Tamper attack |
+| Packet IDs detect duplicates | Replay attack |
 | Safety UX detects key substitution | Malicious key directory simulation |
-| Symmetric ratchet protects past messages | State leak after old keys are erased |
-| DH ratchet supports PCS | State leak followed by DH rekey and future-message test |
+| Symmetric key evolution protects past messages | State leak after old keys are erased |
+| DH rekey supports PCS concept | State leak followed by rekey metric and future-message analysis |
 
 ## Baselines
 
-The experiments should compare at least three variants where possible:
+The experiments should compare against weaker variants where possible:
 
 | Variant | Purpose |
 |---|---|
 | Plain relay baseline | Shows what happens if the server stores readable plaintext |
 | Static-key or symmetric-only variant | Shows limitations before DH recovery is added |
-| Final hybrid ratchet design | Shows target behavior with DH-based recovery |
-
-The baseline is included for comparison only.
+| Current Web Crypto E2EE demo | Shows ciphertext-only relay, AEAD, and lab warnings |
+| Future full DH ratchet | Shows target PCS behavior when complete message-flow rekeying is added |
 
 ## Measurement Rules
 
-- Every experiment must define expected results before implementation.
-- Actual results must be recorded even if they are worse than expected.
-- Metrics should be numeric where possible.
-- Screenshots are useful, but they should not replace raw result files.
-- Experiment scripts should be deterministic enough for another reviewer to rerun.
+- Define expected results before running each experiment.
+- Record actual results even if they are worse than expected.
+- Keep metrics numeric where possible.
+- Use screenshots as evidence, but keep raw JSON/log output too.
+- Mention the exact environment: Python version, browser, OS, and demo data size.
+- Do not claim production-grade security from a course prototype.
 
 ## Experiment Records
 
@@ -86,7 +86,7 @@ Each experiment folder should eventually contain:
 
 ```text
 README.md
-run script
+run script or manual steps
 input fixture or setup notes
 expected-result.md
 actual-result.md
@@ -94,17 +94,45 @@ raw-output file
 screenshot folder if UI evidence is needed
 ```
 
-## Benchmark Metrics
+The current repository does not keep empty experiment folders. Add a dedicated evidence folder only when real scripts, screenshots, or raw outputs exist.
 
-Initial performance metrics:
+## Current Demo Commands
+
+Run the server:
+
+```powershell
+.\scripts\run_dev.ps1
+```
+
+Run backend boundary tests:
+
+```powershell
+.\scripts\test.ps1
+```
+
+Run frontend/decrypt syntax checks:
+
+```powershell
+node --check apps\web\src\app.js
+node --check scripts\decrypt_message.mjs
+```
+
+List and manually decrypt stored packets:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+## Initial Metrics
 
 | Metric | Why it matters |
 |---|---|
 | Login latency | Auth should remain usable with Argon2id |
 | JWT verification time | Measures auth overhead |
 | WebSocket connect/auth latency | Affects chat startup |
-| Encrypt time per message | Measures client-side crypto cost |
+| Encrypt time per message | Measures browser crypto cost |
 | Decrypt time per message | Measures recipient-side crypto cost |
-| DH rekey latency | Measures PCS recovery overhead |
+| DH rekey metric | Explains PCS recovery point |
 | Ciphertext overhead | Shows packet-size cost of E2EE metadata |
-| Throughput | Shows server relay capacity for ciphertext packets |
+| Server relay latency | Shows ciphertext relay cost |

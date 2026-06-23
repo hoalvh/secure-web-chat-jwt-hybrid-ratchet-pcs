@@ -1,8 +1,10 @@
 # Secure Web Chat with JWT Authentication, Hybrid Ratchet and Post-Compromise Security
 
-A Cryptography course project about secure one-to-one web chat. The system combines normal web authentication with JWT, client-side device keys, end-to-end encrypted messages, a lightweight symmetric/DH ratchet, and lab scenarios for forward secrecy and post-compromise security.
+A Cryptography course project about secure one-to-one web chat. The project separates normal web authentication from end-to-end message encryption: JWT authorizes access to the server, while message confidentiality depends on browser-side device keys and per-message encryption keys.
 
-The web app is kept small enough for a final project: login, WebSocket relay, database storage, and chat UI are included so the crypto can be tested in a real workflow. Most of the work is in the encryption protocol, key handling, ratchet state, threat model, and experiments.
+The current repository is a runnable course prototype. It is intentionally smaller than the original full-stack plan so the crypto flow, threat model, admin evidence, and lab endpoints can be demonstrated from one local FastAPI server.
+
+This is not a production secure messenger and not a full Signal implementation.
 
 ## Team
 
@@ -12,151 +14,217 @@ Institution: Ho Chi Minh City University of Technology and Engineering (HCM-UTE)
 |---|---|---|
 | Ly Van Huu Hoa | [@hoalvh](https://github.com/hoalvh) | Application security, authentication, backend relay, Security Lab backend |
 | Le Quang Minh | [@hnhat1234](https://github.com/hnhat1234) | E2EE protocol, key schedule, ratchet, protocol testing |
-| Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend security UX, client state, evaluation UI |
+| Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend security UX, client state, admin/demo UI |
 
 Team responsibilities and execution plan: [docs/00-project/team-and-execution-plan.md](docs/00-project/team-and-execution-plan.md)
 
-## Project Focus
+## Current Implementation
 
-This project is a secure chat prototype, not a complete messaging product.
+The current MVP includes:
 
-Main focus:
+- Register and login with Argon2id password hashing.
+- HMAC-SHA256 JWT access tokens and refresh-token cookies.
+- Device public key registration.
+- Browser-generated ECDH P-256 device keys.
+- Local private-key storage in IndexedDB.
+- One-to-one ciphertext relay over REST and WebSocket notification.
+- Browser-side ECDH, HKDF-SHA256, and AES-GCM encryption/decryption.
+- AES-GCM associated data over the canonical packet header.
+- User chat UI focused on contacts, encrypted chat, and key fingerprints.
+- Admin dashboard for server-side demo records: password hashes, refresh-token hashes, public device keys, ciphertext, and security events.
+- Security Lab backend endpoints for replay, tamper, key substitution, and PCS rekey metrics.
+- Manual Node decrypt helper for checking one stored ciphertext against an exported browser private key.
+- Pytest tests for the FastAPI backend and ciphertext-only storage rules.
 
-- End-to-end encryption.
-- Device identity and public key binding.
-- Per-message key derivation.
-- Symmetric ratchet.
-- DH ratchet.
-- Forward secrecy.
-- Post-compromise security.
-- Replay and tamper resistance.
-- Key-substitution warning.
-- Security experiments and benchmark evidence.
+## Run Locally
 
-Supporting features such as login, database storage, WebSocket relay, and chat UI are implemented only to the level needed for a working demo.
+Recommended Windows/PowerShell path after cloning from GitHub:
 
-Scope boundaries and non-goals: [docs/00-project/project-scope.md](docs/00-project/project-scope.md)
+```powershell
+git clone <repo-url>
+cd secure-web-chat-jwt-hybrid-ratchet-pcs
+.\scripts\setup_windows.ps1
+.\scripts\test.ps1
+.\scripts\run_dev.ps1
+```
 
-## Core Security Goals
+If PowerShell blocks local scripts on a new machine, run the same commands with a temporary execution-policy bypass:
 
-| Goal | Project Meaning |
-|---|---|
-| Authentication is separate from encryption | JWT authenticates users/devices to the server, but does not encrypt or decrypt messages |
-| Ciphertext-only server | The backend stores public key material, routing metadata, and ciphertext, but never plaintext messages or private keys |
-| Per-message secrecy | Each message is encrypted with a fresh message key derived from ratchet state |
-| Forward secrecy | After key erasure, current state should not decrypt old messages |
-| Post-compromise security | After temporary client-state compromise, a later DH ratchet should recover future message confidentiality |
-| Security UX | Safety numbers, key-change warnings, replay/tamper alerts, and recovery status are visible in the UI |
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_dev.ps1
+```
 
-## MVP Features
+Open:
 
-- Username/password registration and login.
-- Password hashing with Argon2id.
-- Short-lived JWT access tokens and refresh-token sessions.
-- WebSocket authentication.
-- Simple device registration.
-- Client-side identity key and signed prekey.
-- One-to-one end-to-end encrypted chat.
-- Symmetric ratchet and DH ratchet.
-- Safety number or key fingerprint display.
-- Key-change warning.
-- Security Lab for attack simulations and metrics.
+```text
+http://127.0.0.1:8000
+```
 
-Out of scope for the MVP:
+Manual equivalent from the repository root:
 
-- Full multi-device synchronization.
-- Group messaging with MLS.
-- Key transparency.
-- Encrypted backup and recovery keys.
-- Production deployment hardening.
-- Formal verification with Tamarin or ProVerif.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+$env:JWT_SECRET="change-this-for-local-demo"
+python -m uvicorn apps.server.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+To reset local demo data before recording or presenting:
+
+```powershell
+.\scripts\reset_demo_data.ps1
+```
+
+Suggested demo accounts:
+
+```text
+admin / pass1234
+alice / pass1234
+bob   / pass1234
+```
+
+Register `admin`, `alice`, and `bob` in the browser. Username `admin` is treated as an admin by default. You can override the admin list with `ADMIN_USERNAMES=admin,teacher`.
+
+Normal user accounts create or reuse a local browser device key and publish only the public key to the server. The admin account opens the server dashboard instead of the chat page.
+
+## Demo Flow
+
+1. Register `admin`, then logout.
+2. Register `alice`.
+3. Register `bob`.
+4. Login as `alice`, open `bob`, check Bob's key fingerprint, and send a message.
+5. Logout, login as `bob`, open `alice`, and confirm Bob decrypts locally in the browser.
+6. Logout, login as `admin`, and review the dashboard.
+
+The admin dashboard should show password hashes, refresh-token hashes, public keys, ciphertext, nonce, tag, and routing metadata. It should not show plaintext message content or private key material.
+
+Manual decrypt check:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+The device JSON must come from the browser IndexedDB device record and must contain `privateKeyJwk`. Keep that file under `tmp/` or another ignored/private path.
 
 ## Architecture
 
 ```text
 +-------------------+        REST/JWT         +----------------------+
-| Alice Web Client  | <---------------------> | Auth + API Server    |
-| - JWT in memory   |                         | - Argon2id password  |
-| - Private keys    |        WebSocket        | - JWT verification   |
-| - Ratchet state   | <---------------------> | - Key directory      |
-| - E2EE crypto     |                         | - Ciphertext relay   |
-+-------------------+                         +----------------------+
-          |                                             ^
-          | E2EE ciphertext only                        |
-          v                                             |
-+-------------------+                         +----------------------+
-| Bob Web Client    |                         | PostgreSQL + Prisma  |
-| - Private keys    |                         | - users/devices      |
-| - Ratchet state   |                         | - public keys only   |
-| - Decrypt locally |                         | - encrypted messages |
-+-------------------+                         +----------------------+
-
-+-------------------+
-| Security Lab UI   |
-| - server dump     |
-| - stolen JWT sim  |
-| - replay/tamper   |
-| - PCS timeline    |
-+-------------------+
+| Alice Web Client  | <---------------------> | FastAPI Server       |
+| - session token   |                         | - Argon2id password  |
+| - IndexedDB key   |        WebSocket        | - JWT verification   |
+| - E2EE crypto     | <---------------------> | - Key directory      |
++-------------------+                         | - Ciphertext relay   |
+          |                                   | - Admin dashboard    |
+          | E2EE ciphertext only              +----------+-----------+
+          v                                              |
++-------------------+                                    |
+| Bob Web Client    |                         +----------v-----------+
+| - IndexedDB key   |                         | Local JSON demo store|
+| - Decrypt locally |                         | - users/sessions     |
+| - Security states |                         | - public keys only   |
++-------------------+                         | - encrypted packets  |
+                                              +----------------------+
 ```
 
-The repository uses a modular layered monorepo rather than classic MVC. The cryptographic protocol is separated from both the UI and backend so it can be tested, reviewed, and explained independently.
-
-Architecture and stack notes: [docs/00-project/technology-decisions.md](docs/00-project/technology-decisions.md)
+JWT is used for server access. It does not encrypt or decrypt messages. Private keys stay in the browser, and the backend rejects device submissions that include private JWK material.
 
 ## Technology Stack
 
-| Layer | Technology | Role |
+| Layer | Current technology | Role |
 |---|---|---|
-| Frontend | React + TypeScript + Vite | Chat UI, login, device setup, Security Lab |
-| Styling | Tailwind CSS | Consistent MVP UI and security-state components |
-| Client storage | IndexedDB / Dexie | Local private keys, device metadata, ratchet state |
-| Backend | Node.js + TypeScript + Fastify | Auth, device/key APIs, message relay, lab endpoints |
-| Realtime | WebSocket | Encrypted packet relay |
-| Database | PostgreSQL + Prisma | Users, devices, public key bundles, ciphertext messages |
-| Auth | Argon2id + JWT + refresh cookie | Login and session management |
-| Crypto | libsodium-wrappers-sumo + @noble/hashes | X25519, Ed25519, XChaCha20-Poly1305, HKDF/SHA-256 |
-| Testing | Vitest + Playwright | Protocol unit tests and browser security-flow tests |
-| Benchmarking | k6 / autocannon | Latency, throughput, and overhead measurements |
-| Local environment | Docker Compose | Reproducible local database setup |
+| Backend | Python + FastAPI | Auth, refresh sessions, device/key APIs, ciphertext relay, admin and lab endpoints |
+| Frontend | HTML + CSS + vanilla JavaScript | Login, user chat UI, admin dashboard, browser crypto |
+| Auth | Argon2id, HMAC-SHA256 JWT, HttpOnly refresh cookie | Password login and API/WebSocket authorization |
+| Realtime | FastAPI WebSocket plus REST polling fallback | Notify recipient clients about new encrypted packets |
+| Storage | Local JSON store under `data/` | Demo persistence for users, refresh sessions, devices, messages, and lab events |
+| Client crypto | Browser Web Crypto API | ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 fingerprints |
+| Client private state | IndexedDB | Browser device private key and safety/fingerprint state |
+| Tests | Pytest + FastAPI TestClient | Backend smoke and security-boundary tests |
+
+PostgreSQL, Prisma, React, TypeScript, Tailwind, Playwright, and fuller benchmark tooling remain reasonable future expansion paths, but they are not the stack used by the current runnable MVP.
+
+## API Surface
+
+Auth:
+
+```text
+POST /auth/register
+POST /auth/login
+POST /auth/refresh
+POST /auth/logout
+GET  /me
+```
+
+Users, devices, and keys:
+
+```text
+GET  /users
+POST /devices
+GET  /devices
+GET  /keys/bundle/{username}
+```
+
+Messages and realtime:
+
+```text
+POST /messages
+GET  /messages/offline?peer={username}
+WS   /ws
+```
+
+Security Lab:
+
+```text
+GET  /lab/messages
+POST /lab/replay
+POST /lab/tamper
+POST /lab/key-substitution
+POST /lab/state-compromise
+GET  /lab/events
+```
+
+Admin:
+
+```text
+GET  /admin
+GET  /admin/dashboard
+```
 
 ## Repository Layout
 
 ```text
 secure-web-chat/
-├─ README.md
-├─ docker-compose.yml
-├─ .env.example
-├─ docs/
-│  ├─ README.md
-│  ├─ 00-project/
-│  ├─ 01-design/
-│  ├─ 02-evaluation/
-│  └─ proposal/
-├─ apps/
-│  ├─ web/
-│  └─ server/
-├─ packages/
-│  └─ protocol/
-├─ prisma/
-├─ experiments/
-├─ benchmarks/
-├─ scripts/
-├─ report/
-└─ presentation/
+|-- README.md
+|-- requirements.txt
+|-- .env.example
+|-- apps/
+|   |-- server/
+|   |   |-- main.py
+|   |   `-- tests/
+|   `-- web/
+|       |-- index.html
+|       `-- src/
+|-- docs/
+`-- scripts/
 ```
 
 | Directory | Purpose |
 |---|---|
+| `apps/server/` | Current FastAPI backend and backend tests |
+| `apps/web/` | Current browser UI, Web Crypto E2EE logic, and styling |
 | `docs/` | Project docs, design decisions, protocol notes, evaluation plan |
-| `apps/web/` | React frontend and browser-side security UX |
-| `apps/server/` | Fastify backend, auth, key directory, ciphertext relay |
-| `packages/protocol/` | Shared protocol types, packet validation, key schedule helpers |
-| `prisma/` | Database schema and migrations |
-| `experiments/` | Attack simulations and reproducible security experiments |
-| `benchmarks/` | Performance scripts and benchmark outputs |
-| `report/` | Final written report material |
-| `presentation/` | Slides, demo script, and presentation assets |
+| `scripts/` | Setup, test, run, reset, and manual decrypt helpers |
 
 ## Documentation
 
@@ -164,42 +232,47 @@ secure-web-chat/
 |---|---|
 | [docs/README.md](docs/README.md) | Documentation index |
 | [Team and Execution Plan](docs/00-project/team-and-execution-plan.md) | Roles, ownership, milestones, branch workflow |
-| [Project Scope and Non-Goals](docs/00-project/project-scope.md) | MVP depth, non-goals, database scope, algorithm scope |
-| [Technology Decisions](docs/00-project/technology-decisions.md) | Stack choices, alternatives, trade-offs |
+| [Project Scope and Non-Goals](docs/00-project/project-scope.md) | MVP depth, non-goals, storage scope, algorithm scope |
+| [Technology Decisions](docs/00-project/technology-decisions.md) | Current stack choices, trade-offs, future expansion |
 | [Repository Hygiene](docs/00-project/repository-hygiene.md) | GitHub setup, `.env` rules, secret-handling notes |
+| [GitHub Publish Checklist](docs/00-project/github-publish-checklist.md) | Files to keep, files to ignore, and fresh-clone run checks |
 | [Threat Model](docs/01-design/threat-model.md) | Assets, trust boundaries, attacker scenarios |
 | [Authentication and JWT](docs/01-design/authentication-and-jwt.md) | Auth flow, JWT, refresh session, WebSocket auth |
+| [Device Identity and Key Binding](docs/01-design/device-identity-and-key-binding.md) | Device keys, public key binding, fingerprint warnings |
 | [E2EE Protocol Design](docs/01-design/e2ee-protocol-design.md) | Packet format and encrypted messaging protocol |
-| [Key Schedule and Ratchet](docs/01-design/key-schedule-and-ratchet.md) | Root keys, chain keys, message keys, DH ratchet |
+| [Key Schedule and Ratchet](docs/01-design/key-schedule-and-ratchet.md) | Root keys, chain keys, message keys, ratchet limitations |
+| [Security UX](docs/01-design/security-ux.md) | UI states for encryption, warnings, and lab evidence |
 | [Experiment Plan](docs/02-evaluation/experiment-plan.md) | Server compromise, stolen JWT, replay, tamper, FS, PCS |
+| [Code Flow and Runtime Explanation](docs/02-evaluation/code-flow-runtime-explanation.md) | Detailed runtime flow, browser/server storage, token structure, admin/user split |
+| [Risks, Goals, Solution, Architecture, Demo](docs/02-evaluation/risks-goals-solution-architecture-demo.md) | Clear risks-to-goals mapping, architecture, demo results, and commands |
+| [Project Gaps and Limitations](docs/02-evaluation/project-gaps-and-limitations.md) | Honest list of missing production features and next milestones |
 
-## Evaluation Plan
+## Tests
 
-The Security Lab is the main demonstration and evaluation interface.
+Run:
 
-| Scenario | Expected Evidence |
-|---|---|
-| Server compromise | Server database contains ciphertext only |
-| Stolen JWT | JWT can access server APIs temporarily but cannot decrypt messages |
-| Replay attack | Replayed packet is rejected |
-| Tamper attack | Modified header/ciphertext fails AEAD verification |
-| Key substitution | UI displays key-change or unverified-key warning |
-| Forward secrecy | Past messages remain protected after current-state exposure |
-| Post-compromise security | Future messages recover after a DH ratchet event |
+```powershell
+python -m pytest apps/server/tests
+```
 
-Performance measurements include login latency, JWT verification time, WebSocket auth latency, encrypt/decrypt time, DH rekey latency, ciphertext overhead, and relay throughput.
+The current backend tests cover register/login, device public key storage, ciphertext-only message storage, lab dump behavior, rejection of message packets that contain plaintext, admin-dashboard authorization, and contact-list filtering.
 
 ## Security Constraints
 
-- Do not implement low-level cryptographic primitives manually when reviewed libraries are available.
-- Do not store private keys or ratchet state on the server.
+- Do not store plaintext messages on the server.
+- Do not accept private keys in device registration.
 - Do not store long-lived access tokens in `localStorage`.
 - Do not pass JWTs through WebSocket URL query strings.
 - Use authenticated encryption with stable associated data for encrypted message packets.
 - Keep experiment results reproducible and separate from source code.
 
-## Repository Safety
+## Limitations
 
-Commit `.env.example`, but never commit `.env`, private keys, real secrets, local database files, logs, or generated dependency/build artifacts.
+- The current store is a JSON demo store, not PostgreSQL.
+- The current protocol is a simplified course implementation, not full Signal.
+- The DH rekey/PCS behavior is currently represented in the Security Lab metrics rather than a complete production double-ratchet message flow.
+- IndexedDB keeps the demo usable across reloads, but it does not protect against XSS, malware, or malicious browser extensions.
+- Browser private keys are extractable in the current demo so the Web Crypto flow is easier to inspect and rerun.
+- Playwright UI tests and full benchmark result files have not been added yet.
 
 Repository hygiene details: [docs/00-project/repository-hygiene.md](docs/00-project/repository-hygiene.md)

@@ -1,125 +1,165 @@
 # Protocol Design
 
-This document describes the planned end-to-end encryption protocol.
+This document describes the current end-to-end encryption design. The protocol is Signal-inspired but simplified for a course prototype. It must not be presented as production-ready or as a full Signal implementation.
 
 ## Scope
 
-The protocol is Signal-inspired but simplified for this project. It is not a full Signal implementation and should not be presented as production-ready.
+The implementation should demonstrate:
 
-The implementation should cover:
-
-- Correct separation between authentication and encryption.
-- Clear key schedule.
-- Per-message encryption keys.
-- AEAD associated data.
-- Replay rejection.
-- Forward secrecy experiment.
-- Post-compromise security experiment.
-- Limitations.
-
-Chat-product features such as avatars, message search, read receipts, file sharing, profile pages, and notifications are out of scope unless they support the security demo.
-
-## Components
-
-- Initial session setup using an X3DH-inspired prekey flow.
-- Root key derived using HKDF.
-- Sending and receiving chain keys.
-- Per-message message keys.
+- Separation between JWT authentication and message encryption.
+- Client-side device keys.
+- Public key lookup through the server.
+- Per-message key derivation.
 - AEAD encryption with associated data.
-- Symmetric ratchet for per-message key evolution.
-- DH ratchet for post-compromise recovery.
-- Replay protection using message counters.
-- Optional skipped-message key handling for out-of-order messages.
+- Replay and tamper experiments.
+- Key-substitution warning.
+- Forward secrecy and post-compromise security concepts.
+
+Product features such as group chat, file sharing, push notifications, search, account recovery, and full multi-device sync are out of scope unless they directly support the security demo.
+
+## Current Components
+
+Current browser-side primitives:
+
+- ECDH P-256 through Web Crypto.
+- HKDF-SHA256 through Web Crypto.
+- AES-GCM through Web Crypto.
+- SHA-256 fingerprints through Web Crypto.
+- Random 96-bit AES-GCM nonces through Web Crypto.
+
+Current server-side role:
+
+- Authenticate users.
+- Store public device keys.
+- Store and relay encrypted packets.
+- Reject plaintext packet submissions.
+- Reject device registrations that include private JWK material.
+- Provide admin/dashboard evidence and Security Lab endpoints.
+
+The server does not decrypt message ciphertext.
+
+## Current Session Model
+
+The current MVP uses a simple public key directory:
+
+1. A browser generates an ECDH P-256 device key pair.
+2. The private key stays in IndexedDB.
+3. The browser publishes the public key JWK and SHA-256 fingerprint to `/devices`.
+4. A sender fetches the recipient bundle from `/keys/bundle/{username}`.
+5. The sender derives an ECDH shared secret with the recipient public key.
+6. HKDF derives a root key and per-message keys.
+7. AES-GCM encrypts the plaintext locally.
+8. The server stores and relays only the encrypted packet.
+
+This is enough for the course demo but does not implement full X3DH, signed prekeys, skipped-message keys, or full Double Ratchet behavior.
+
+## Manual Decryption Requirements
+
+To decrypt one stored ciphertext outside the browser, the same inputs and algorithm are required:
+
+- Server JSON store containing the selected packet and peer public device key.
+- Local browser device private key JWK for either the sender or recipient.
+- Packet header exactly as stored.
+- Packet `nonce`, `ciphertext`, and `tag`.
+- Same derivation labels used by the frontend:
+  - `root-from-ecdh`
+  - `chain:v1:{conversation_id}:{sender}->{recipient}`
+  - `next-chain-key:{step}`
+  - `message-key:{message_number}`
+
+Current helper:
+
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
+
+If any input differs, AES-GCM authentication fails instead of returning plaintext.
 
 ## Message Packet
 
-Each encrypted message should include:
+Each encrypted message packet contains:
 
-- Protocol version.
-- Conversation ID.
-- Sender user ID.
-- Sender device ID.
-- Recipient user ID.
-- Recipient device ID.
-- Ratchet public key.
-- Message number.
-- Nonce.
-- Ciphertext.
+- `version`
+- `algorithm`
+- `header`
+- `nonce`
+- `ciphertext`
+- `tag`
 
-Header fields must be included in associated data.
-
-## Technology and Library Decisions
-
-| Decision | Choice | Reason |
-|---|---|---|
-| Crypto primitive library | `libsodium-wrappers-sumo` | Provides reviewed high-level primitives instead of hand-written cryptography |
-| Hash/KDF helpers | `@noble/hashes` | Keeps HKDF/SHA-256 behavior explicit, typed, and testable |
-| Key agreement | X25519 | Fits Signal-inspired DH ratchet design and modern elliptic-curve key exchange |
-| Identity signatures | Ed25519 | Used to sign device prekeys and bind prekeys to long-term device identity |
-| Message encryption | XChaCha20-Poly1305 | AEAD provides confidentiality and integrity; large nonce space is convenient for message encryption |
-| Packet transport | WebSocket | Allows direct encrypted packet relay and easy lab inspection |
-| Shared package | `packages/protocol` | Prevents client/server packet-format drift |
-
-## Signal-Inspired Protocol
-
-The project needs to demonstrate forward secrecy and post-compromise security, not just encrypted storage. A static shared key or simple AES encryption would only show confidentiality at one point in time.
-
-A Signal-inspired ratchet is chosen because it gives the project three visible security properties:
-
-- **Per-message key evolution:** each message uses a different message key.
-- **Forward secrecy:** after key erasure, current state should not decrypt old messages.
-- **Post-compromise recovery:** a later DH ratchet can introduce fresh entropy after temporary state exposure.
-
-The design should be described as "Signal-inspired", not as a full Signal implementation.
-
-## WebSocket Instead of Socket.IO
-
-WebSocket is selected because the project benefits from a transparent relay layer. The server forwards encrypted packets and does not need higher-level room/event abstractions.
-
-Socket.IO is useful in many chat apps, but it adds protocol behavior that is not needed for this MVP. A direct WebSocket frame keeps the data path easier to inspect:
+Current algorithm label:
 
 ```text
-browser encrypts plaintext
--> sends encrypted packet over WebSocket
--> server relays ciphertext
--> recipient decrypts locally
+ECDH-P-256+HKDF-SHA256+AES-GCM
 ```
 
-## AEAD Requirement
+Current header fields:
 
-The protocol must use authenticated encryption, not encryption alone. AEAD binds ciphertext to associated data so tampering with sender, recipient, device ID, counters, or ratchet headers is detected.
+| Field | Purpose |
+|---|---|
+| `version` | Protocol version |
+| `conversation_id` | Stable conversation identifier |
+| `sender_user_id` | Authenticated sender user |
+| `sender_device_id` | Sender browser device |
+| `recipient_user_id` | Recipient user |
+| `recipient_device_id` | Recipient browser device |
+| `message_number` | Per-direction message counter |
+| `ratchet_public_key` | Current demo fingerprint/ratchet marker |
 
-Associated data should include:
+The canonical JSON header is passed as AES-GCM associated data. If an attacker changes routing metadata or ciphertext, decryption should fail.
 
-- Protocol version.
-- Conversation ID.
-- Sender user ID and device ID.
-- Recipient user ID and device ID.
-- Ratchet public key.
-- Message number.
-- Previous-chain length if implemented.
+## Replay and Tamper Handling
 
-## Shared Packet Ownership
+Tamper handling relies on AES-GCM authentication:
 
-Packet definitions belong in `packages/protocol/` because both the client and server need to understand the same outer packet shape.
+```text
+modified header or ciphertext -> AES-GCM tag verification fails
+```
 
-The client uses packet definitions to encrypt, decrypt, and validate local state. The server uses packet definitions only to validate routing metadata and store/relay ciphertext. The server must not contain plaintext parsing logic.
+Replay handling in the current browser/lab flow tracks packet IDs derived from:
+
+```text
+conversation_id:sender_user_id:recipient_user_id:message_number
+```
+
+The backend lab endpoints use this to demonstrate duplicate packet detection. A production design would need a more complete replay window and skipped-message handling.
+
+## Key Substitution Handling
+
+The server is a public key directory. If it maliciously replaces Bob's public key, Alice can still perform ECDH, but she would be encrypting to the wrong key.
+
+The UI therefore shows fingerprints and key-change warnings. This does not fully solve first-contact trust, but it makes the risk visible for the demo and report.
+
+## Signal-Inspired Limits
+
+The project borrows the ideas of per-message keys, ratcheting, forward secrecy, and post-compromise recovery. The current implementation is intentionally simplified:
+
+- It uses one browser ECDH P-256 device key per user in the demo.
+- It derives deterministic per-message keys from a root key and message number.
+- It does not implement full X3DH.
+- It does not implement signed prekeys.
+- It does not implement full Double Ratchet message flow.
+- The PCS/DH rekey behavior is currently shown through Security Lab metrics rather than complete message-flow rekeying.
+
+These limits should be stated clearly in the final report.
 
 ## Alternative Designs Considered
 
-| Alternative | Why not chosen |
+| Alternative | Why not used in current MVP |
 |---|---|
-| Plain TLS chat | TLS protects transport only; the server can still read messages |
-| Static shared room key | Simple, but weak for forward secrecy and no post-compromise recovery |
-| Symmetric ratchet only | Good for per-message keys, but cannot recover after current ratchet state is compromised |
-| Full Signal protocol | Stronger, but too large for the course scope |
-| MLS group messaging | Interesting, but group messaging would expand the project beyond the MVP |
+| Plain TLS chat | TLS protects transport only; the server could still read messages |
+| Static shared room key | Simple, but weak for forward secrecy and no PCS story |
+| Symmetric ratchet only | Shows per-message keys, but cannot recover after current chain-state compromise |
+| Full Signal protocol | Stronger, but too large for the course deadline |
+| X25519/Ed25519/libsodium stack | Good future path, but the current browser demo uses built-in Web Crypto P-256 |
+| MLS group messaging | Interesting, but group messaging expands the project beyond MVP |
 
 ## Implementation Rules
 
-- Do not manually implement X25519, Ed25519, AEAD, HKDF, or random generation.
-- Keep plaintext only inside the sender and recipient clients.
-- Include all relevant header fields in associated data.
-- Reject packets with unsupported protocol versions.
-- Reject duplicate or replayed message counters.
-- Keep protocol tests independent from React and Fastify.
+- Do not implement low-level cryptographic primitives manually.
+- Keep plaintext only inside sender and recipient clients.
+- Include important packet headers in AEAD associated data.
+- Reject unsupported protocol versions.
+- Reject packets containing plaintext before storage.
+- Reject private key material submitted to the backend.
+- Keep protocol tests independent from UI styling.

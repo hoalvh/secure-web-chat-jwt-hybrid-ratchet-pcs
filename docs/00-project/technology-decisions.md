@@ -1,461 +1,244 @@
 # Technology Decisions
 
-This document records the main technology choices for the project and the trade-offs behind them.
+This document records the technology choices that match the current runnable implementation. Earlier project planning mentioned a larger React/Fastify/PostgreSQL/Prisma stack; those remain future expansion options, not the current MVP stack.
 
 ## 1. Decision Principles
 
 The stack is chosen using five principles:
 
 - **Cryptographic clarity:** authentication, transport security, and end-to-end encryption must remain separate concepts.
-- **Testability:** protocol logic must be testable without running the full web application.
-- **Reproducibility:** experiments and benchmarks should run from documented scripts.
-- **Course fit:** the implementation should make cryptographic behavior visible enough for explanation and testing.
-- **Controlled scope:** the project should stay within a three-week final-project workload.
+- **Testability:** important security boundaries must be testable with small local commands.
+- **Reproducibility:** the demo should run from documented PowerShell commands on a teammate machine.
+- **Course fit:** cryptographic behavior must be visible enough for explanation and grading.
+- **Controlled scope:** the project should stay small enough to finish as a final-project prototype.
 
 Detailed scope boundaries are defined in [`project-scope.md`](project-scope.md).
 
-## 2. Project Scope
+## 2. Current Stack Summary
 
-This is a **Cryptography course project**, not a general-purpose chat product. The stack is chosen so the team can build and test the encrypted messaging flow without spending most of the time on product features.
-
-The project should go deep on:
-
-- End-to-end encryption.
-- Device identity and key binding.
-- Signed prekeys.
-- Symmetric ratchet.
-- DH ratchet.
-- Forward secrecy.
-- Post-compromise security.
-- Replay and tamper resistance.
-- Key substitution detection.
-- Security benchmarks and experiment evidence.
-
-Other application features are kept at MVP level:
-
-- Login/register.
-- JWT session management.
-- Device setup.
-- One-to-one chat.
-- Contact selection.
-- Message relay.
-- Relational database schema with practical constraints and indexes.
-- Basic local persistence.
-- Security-state UI.
-
-These features give the protocol a realistic context. They should stay simple unless a change is needed for the security demo.
-
-Possible extensions after the MVP:
-
-| Current MVP feature | Future extension path |
-|---|---|
-| One-device-per-user or simple device model | Full multi-device support with per-device sessions |
-| One-to-one chat | Group messaging or MLS-based group encryption |
-| Basic JWT login | MFA, OAuth, account recovery, session dashboard |
-| Local IndexedDB key storage | Encrypted backup and recovery-key flow |
-| Manual safety number verification | Key transparency or audit log |
-| Local Docker Compose setup | Production deployment with observability and hardened secrets |
-| Basic PostgreSQL schema and indexes | Partitioning, sharding, replication, and advanced query tuning |
-
-The main implementation and report effort should stay on encryption design, threat model, tests, and experiment results.
+| Layer | Current decision | Why it fits now |
+|---|---|---|
+| Backend | Python + FastAPI | Small API surface, built-in OpenAPI, easy local run command, good pytest support |
+| Frontend | HTML + CSS + vanilla JavaScript | No build step, easy demo, direct access to Web Crypto, IndexedDB, and admin/user UI state |
+| Auth | Argon2id + HMAC-SHA256 JWT + refresh cookie | Demonstrates password hashing, short-lived access tokens, and revocable refresh sessions |
+| Realtime | FastAPI WebSocket plus REST fallback | Shows explicit WebSocket auth while keeping the demo reliable through polling |
+| Server storage | Local JSON store in `data/demo_store.json` | Simple inspectable persistence for course demos and tests |
+| Client crypto | Browser Web Crypto API | Provides reviewed browser primitives for ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 |
+| Client state | IndexedDB | Persists browser private key and safety state across reloads |
+| Tests/tools | Pytest + FastAPI TestClient, Node syntax/decrypt helper | Verifies backend auth/device/ciphertext/admin boundaries and allows manual ciphertext decryption checks |
 
 ## 3. Architecture Decision
 
-### Chosen Approach
+The project uses a modular layered repository:
 
-The project uses a **modular layered monorepo**:
+- `apps/web/` contains the browser UI, IndexedDB state, admin dashboard rendering, and Web Crypto E2EE logic.
+- `apps/server/` contains FastAPI routes for auth, device/key APIs, ciphertext relay, WebSocket auth, and lab controls.
+- `docs/` contains design evidence, evaluation notes, and grading artifacts.
+- `scripts/` contains setup, test, run, reset, and manual decrypt helpers.
 
-- `apps/web/` for browser UI, local keys, local ratchet state, and client-side cryptography.
-- `apps/server/` for login, JWT verification, device/key directory, message relay, and lab controls.
-- `packages/protocol/` for shared packet formats, validation, canonical encoding, and protocol constants.
-- `docs/`, `experiments/`, and `benchmarks/` for design evidence and grading artifacts.
-
-### MVC Note
-
-Classic MVC is not the best fit here because the difficult part is protocol state: root keys, chain keys, message counters, skipped-message keys, associated data, replay windows, and compromise recovery.
-
-If the project is organized around controllers and models only, crypto logic can drift into the backend or UI. Keeping a separate protocol package makes it easier to test.
-
-### Folder Structure Fit
-
-The current folder structure already matches this choice:
-
-- Application boundaries are explicit through `apps/web/` and `apps/server/`.
-- Shared protocol code has its own package instead of being duplicated.
-- Experiments and benchmarks have their own folders.
-- Documentation lives next to implementation, so each design claim can later be linked to a test or experiment.
+Classic MVC is not the main organizing model because the hard part is protocol state: root keys, chain keys, message counters, associated data, replay handling, and compromise-recovery experiments. Keeping server, browser, and protocol documentation separate makes the trust boundary easier to review.
 
 ## 4. Frontend Stack
 
-### React
+### Vanilla JavaScript
 
-React is chosen because the frontend has several stateful views: login/register, device setup, contact list, conversation, safety number modal, key-change warning, and Security Lab dashboard.
-
-React fits this because:
-
-- UI can be split into small components that map naturally to security states.
-- State changes such as `unverified`, `key changed`, `tamper detected`, and `recovered after rekey` can be represented clearly.
-- The team can build an interactive lab without introducing a heavier full-stack framework.
-
-Alternatives considered:
-
-| Alternative | Why not chosen |
-|---|---|
-| Vanilla JavaScript | Too much manual state handling for chat and lab UI |
-| Next.js | Useful for full-stack SSR apps, but unnecessary because this project does not need SEO or server-rendered pages |
-| Vue/Svelte | Also valid, but React has broad team familiarity and testing ecosystem support |
-
-### TypeScript
-
-TypeScript is chosen across frontend, backend, and shared protocol code.
+The current UI is written in plain browser JavaScript in `apps/web/src/app.js`.
 
 Reasons:
 
-- Message packets, JWT claims, device IDs, counters, and protocol versions should have explicit types.
-- Shared types reduce mismatch between client packets and server relay validation.
-- Cryptographic code benefits from stronger compile-time checks around byte arrays, encoded strings, and packet structures.
+- No bundler or package install is required to run the demo.
+- Web Crypto and IndexedDB are available directly in the browser.
+- The app surface is small: login/register, contact selection, encrypted chat, key/fingerprint inspection, and admin dashboard.
+- It keeps the course demo easy to inspect during presentation.
 
-TypeScript does not prove protocol security, but it reduces ordinary implementation mistakes that would weaken the demo.
+Trade-off: plain JavaScript gives less type safety and less component structure than React/TypeScript. If the UI grows, React + TypeScript + Vite would be a reasonable next step.
 
-### Vite
+### CSS
 
-Vite is chosen for the frontend build/dev environment.
-
-Reasons:
-
-- It supports React and TypeScript with a small configuration surface.
-- Fast local development helps the team iterate on UI and Security Lab screens.
-- It avoids the extra routing and deployment assumptions of a larger full-stack framework.
-
-Trade-off: Vite is a frontend tool only, so the backend remains a separate Fastify app. This fits the project because the server is an auth/key/message relay, not a page-rendering server.
-
-### Tailwind CSS
-
-Tailwind CSS is chosen because the project needs clear, consistent security-state UI more than custom visual branding.
+The current UI uses a single CSS file at `apps/web/src/styles.css`.
 
 Reasons:
 
-- Security badges, warning panels, lab controls, and chat states can be styled consistently.
-- Utility classes reduce time spent designing a CSS architecture.
-- It reduces time spent on CSS structure.
+- Chat, key-inspector, and admin-dashboard states are easier to keep stable in a small static stylesheet.
+- There is no Tailwind build step.
+- The screenshots remain predictable for report evidence.
 
-Trade-off: Tailwind classes can become noisy in large components. The mitigation is to extract repeated UI patterns into components such as `SecurityBadge`, `KeyChangeWarning`, and `LabMetricCard`.
+Trade-off: repeated visual patterns must be maintained manually.
 
-### IndexedDB and Dexie
+### IndexedDB
 
-IndexedDB is chosen because the browser client must persist local cryptographic state. Dexie is used as a thin wrapper to make IndexedDB safer and easier to use from TypeScript.
+IndexedDB stores local browser state:
 
-Stored locally:
+- Device private key JWK.
+- Device ID and public key.
+- Contact fingerprint/safety state.
 
-- Device ID.
-- Private identity key.
-- Signed prekey private key.
-- Current ratchet state.
-- Skipped message keys if out-of-order handling is implemented.
-- Safety number verification status.
+The current code uses the native IndexedDB API rather than Dexie. Dexie can be added later if the local state model becomes more complex.
 
-Why not `localStorage`:
-
-- It is synchronous and too limited for structured cryptographic state.
-- It encourages simple string dumps of sensitive data.
-- It is easier to misuse for tokens and long-lived secrets.
-
-Important limitation: IndexedDB does not make browser malware, XSS, or malicious extensions safe. The project must still document XSS as a serious threat.
+Important limitation: IndexedDB does not protect against XSS, malware, or malicious browser extensions. It only keeps private keys out of the server-side store.
 
 ## 5. Backend Stack
 
-### Node.js and TypeScript
+### FastAPI
 
-Node.js with TypeScript is chosen to keep one language across the frontend, backend, and shared protocol package.
-
-Reasons:
-
-- Shared packet types and validation logic can be reused.
-- Team members only need one main runtime and package ecosystem.
-- WebSocket and JSON API implementation is straightforward.
-
-Trade-off: Node.js is not chosen for heavy CPU-bound cryptography. Server-side crypto is limited to password hashing, token signing/verification, and public key validation. End-to-end message encryption remains client-side.
-
-### Fastify
-
-Fastify is chosen as the backend framework.
+FastAPI is the current backend framework.
 
 Reasons:
 
-- It is lightweight and has enough structure for the API.
-- Route-level schemas match the need to validate auth, device, key, and message-relay inputs.
-- It avoids the boilerplate of larger opinionated frameworks.
-- It works well with TypeScript and a modular folder structure.
+- Route handlers are compact and easy to read for a course project.
+- Pydantic models validate auth/device/message request bodies.
+- FastAPI supports REST and WebSocket in the same app.
+- `TestClient` makes backend boundary tests straightforward.
+- The same server can serve the static frontend at `/`.
 
-Alternatives considered:
+### Local JSON Store
 
-| Alternative | Why not chosen |
-|---|---|
-| Express | Simple, but less structured around route schemas by default |
-| NestJS | Strong architecture, but heavier than needed for this project |
-| Next.js API routes | Couples backend to frontend framework and weakens the clear client/server trust boundary |
+The current server persists demo data in `data/demo_store.json`.
 
-### PostgreSQL
+Stored data includes:
 
-PostgreSQL is chosen as the database.
+- Users and password hashes.
+- Refresh session hashes and expiration.
+- Device public keys and fingerprints.
+- Encrypted message packets.
+- Security Lab events.
 
-Reasons:
-
-- The domain is relational: users, devices, refresh sessions, public key bundles, conversations, and messages.
-- Constraints and indexes are useful for unique usernames, device ownership, message lookup, and replay-related metadata.
-- It can store structured metadata while keeping ciphertext as opaque bytes/text.
-
-Why not MongoDB:
-
-- Flexible documents are not the main need here.
-- Strong relational constraints are more valuable for auth and device ownership.
-
-Why not SQLite as the main database:
-
-- SQLite is fine for a tiny local demo, but PostgreSQL is closer to a realistic web deployment and works well with Docker Compose.
-
-### Prisma
-
-Prisma is chosen for database access and migrations.
-
-Reasons:
-
-- Type-safe database access reduces mistakes in auth/session/device queries.
-- Migrations make the schema reproducible for teammates and grading.
-- The Prisma schema gives the report a clean way to show the stored data model.
-
-Trade-off: Prisma adds generated code and an ORM abstraction. If the project later focuses on low-level database tuning, raw SQL may be better. For this MVP, Prisma keeps the schema and migrations easy to reproduce.
-
-## 6. Authentication Libraries
-
-### Argon2id
-
-Argon2id is chosen for password hashing.
-
-Reasons:
-
-- Passwords must never be stored as plaintext or reversible encryption.
-- Argon2id is a modern password hashing choice with memory-hard behavior.
-- It is more suitable for a new project than legacy password hashing choices.
-
-Trade-off: Argon2id parameters must be tuned so login is slow enough to resist guessing but still usable in the demo environment. The chosen parameters should be benchmarked and documented.
-
-### JWT
-
-JWT is chosen for short-lived access tokens.
-
-Reasons:
-
-- The server can verify access without querying a session table on every request.
-- JWT claims can include `sub`, `device_id`, `session_id`, `iat`, `exp`, and `jti`.
-- It works cleanly for REST and WebSocket authentication when sent through an auth frame.
-
-Important boundary:
-
-- JWT authenticates a user/device to the server.
-- JWT does not encrypt messages.
-- JWT does not prove that a public key belongs to the right human.
-- JWT compromise should not reveal plaintext without local device keys.
-
-### HttpOnly Refresh Cookie
-
-Refresh tokens are stored as opaque random values in HttpOnly cookies and hashed in the database.
-
-Reasons:
-
-- Access JWTs can be short-lived.
-- Refresh sessions can be revoked on logout.
-- Hashing refresh tokens limits damage if the database is inspected.
-- HttpOnly cookies reduce direct JavaScript access compared with storing long-lived tokens in localStorage.
-
-Trade-off: cookies require CSRF-aware design. The project should use SameSite settings and restrict refresh endpoints.
-
-### `jose`
-
-`jose` is chosen for JWT/JWS handling.
-
-Reasons:
-
-- JWT signing and verification should not be implemented manually.
-- The library supports standard JOSE/JWT concepts.
-- It works across modern JavaScript runtimes, which fits a TypeScript project.
-
-Planned algorithm: RS256 for access-token signing. This keeps account-session tokens separate from Ed25519 device identity keys and makes server-side key rotation easier to explain in the report.
-
-## 7. Cryptography Libraries
-
-### libsodium-wrappers-sumo
-
-`libsodium-wrappers-sumo` is chosen for high-level cryptographic primitives.
-
-Used for:
-
-- X25519 key agreement.
-- Ed25519 signatures.
-- XChaCha20-Poly1305 authenticated encryption.
-- Secure random bytes.
-
-Reasons:
-
-- The project must not implement low-level primitives manually.
-- Libsodium provides well-known high-level APIs for modern cryptographic operations.
-- XChaCha20-Poly1305 is convenient for message encryption because it uses a large nonce space and AEAD authentication.
-- X25519 and Ed25519 match the Signal-inspired design.
-
-Trade-off: the browser build includes WebAssembly/JavaScript wrapper overhead. For this MVP, crypto correctness matters more than minimal bundle size.
-
-### @noble/hashes
-
-`@noble/hashes` is chosen for hash and KDF helpers such as SHA-256 and HKDF when not using an equivalent libsodium API.
-
-Reasons:
-
-- HKDF and SHA-256 are needed for root keys, chain keys, message keys, and safety-number fingerprints.
-- A small focused hashing library keeps the key schedule explicit and testable.
-- It works naturally in TypeScript.
-
-Rule: hash/KDF usage must be centralized in `packages/protocol/` or `apps/web/src/crypto/`, not scattered across UI components.
-
-### Browser Web Crypto Note
-
-Browser Web Crypto is useful, but it is not selected as the primary crypto layer for this project.
-
-Reasons:
-
-- The project wants a consistent API for X25519, Ed25519, XChaCha20-Poly1305, and related helpers.
-- XChaCha20-Poly1305 is not the normal Web Crypto AEAD option.
-- Libsodium keeps the algorithm set consistent for the Signal-inspired protocol.
-
-Web Crypto may still be used for random generation or supporting utilities if it does not split the protocol into inconsistent implementations.
-
-## 8. Realtime Communication
+This is intentionally inspectable for the server-compromise/admin-dashboard demo. It is not a production database. PostgreSQL plus migrations can replace it later when the team needs stronger relational constraints and multi-user durability.
 
 ### WebSocket
 
-WebSocket is chosen for realtime encrypted message relay.
+WebSocket is used for authenticated notification frames. The browser first opens `/ws`, then sends:
 
-Reasons:
+```json
+{
+  "type": "auth",
+  "access_token": "jwt..."
+}
+```
 
-- Chat needs bidirectional communication.
-- The server should relay ciphertext packets without understanding plaintext.
-- A direct WebSocket protocol makes packet framing, authentication frames, and replay experiments easier to explain.
+The frontend also polls offline messages every 2.5 seconds while a conversation is open. This fallback keeps the local demo usable even when a WebSocket disconnects.
 
-Why not Socket.IO:
+## 6. Authentication Decisions
 
-- Socket.IO is convenient, but it adds an extra abstraction and fallback behavior that is not needed for the MVP.
-- The project benefits from showing exactly what encrypted packet is sent over the wire.
+### Argon2id
 
-Why not polling:
+Argon2id is used through `argon2-cffi` when dependencies are installed. It is a modern password hashing choice and keeps password storage separate from message encryption.
 
-- Polling is simpler but less realistic for chat and makes latency benchmarks less meaningful.
+The code includes a development fallback based on `scrypt` only so the server can fail more gracefully if dependencies are missing. The intended dependency path is still Argon2id.
 
-## 9. Testing and Benchmarking
+### JWT
 
-### Vitest
+The current access token is an HMAC-SHA256 JWT created by the FastAPI app. It includes:
 
-Vitest is chosen for unit tests.
+- `sub`
+- `username`
+- `session_id`
+- `jti`
+- `iat`
+- `exp`
+- `iss`
+- `aud`
 
-Test targets:
+JWT authorizes API and WebSocket access. It does not decrypt messages and does not prove that a public key belongs to a human contact.
 
-- Packet validation.
-- Canonical encoding.
-- HKDF output consistency.
-- Ratchet step behavior.
-- Replay counter checks.
-- JWT claim validation helpers.
+### Refresh Cookie
 
-Reason: it fits the Vite/TypeScript ecosystem and allows fast feedback for protocol helper functions.
+Refresh tokens are opaque random values stored in an HttpOnly cookie. The server stores only their SHA-256 hash in the JSON demo store. Logout marks matching sessions as revoked and deletes the cookie.
 
-### Playwright
+## 7. Cryptography Decisions
 
-Playwright is chosen for end-to-end browser tests.
+### Browser Web Crypto
 
-Test targets:
+The current browser implementation uses Web Crypto for:
 
-- Login/register flow.
-- Device setup.
-- Sending and receiving encrypted messages.
-- Key-change warning display.
-- Replay/tamper detection UI.
-- Security Lab demo flow.
+- ECDH P-256 device key generation and shared secret derivation.
+- HKDF-SHA256 root, chain, and message key derivation.
+- AES-GCM authenticated encryption.
+- SHA-256 public key fingerprints.
+- Random AES-GCM nonces.
 
-Reason: the project needs proof that security UX is not just documentation. Browser automation can verify that warnings and lab states appear as intended.
+This keeps low-level primitive implementation out of project code. The project code composes primitives into packet format, associated data, and key schedule logic.
 
-### k6
+### P-256 Instead of X25519
 
-k6 is chosen for scripted load/performance tests.
+The current implementation uses P-256 because it is widely available in browser Web Crypto. The original Signal-inspired design can still be discussed as future work with X25519/Ed25519/libsodium, but the current code and docs should describe P-256 honestly.
 
-Use cases:
+### AES-GCM
 
-- Login endpoint latency.
-- JWT refresh endpoint behavior.
-- Message relay under multiple simulated users.
-- WebSocket connection behavior if included in the benchmark plan.
+AES-GCM is used because it gives confidentiality and integrity in one AEAD mode. The packet header is serialized canonically and passed as associated data, so changes to sender, recipient, device IDs, conversation ID, message number, or ratchet fingerprint cause decrypt failure.
 
-### autocannon
+## 8. Testing and Benchmarking
 
-autocannon is chosen for focused local HTTP benchmarking.
+### Current Tests
 
-Use cases:
+The current test command is:
 
-- Fastify route throughput.
-- JWT verification endpoint overhead.
-- API latency before and after validation middleware.
+```powershell
+python -m pytest apps/server/tests
+```
 
-Why both k6 and autocannon:
+The tests cover:
 
-- `autocannon` is convenient for quick local API measurements.
-- `k6` is better for scripted scenarios and result reporting.
+- Register/login.
+- Device public key storage.
+- Rejection of private key material.
+- Ciphertext-only message storage.
+- Security Lab dump without plaintext.
+- Rejection of message packets that contain plaintext.
 
-## 10. Local Environment
+### Future Tests
 
-### Docker Compose
+Reasonable next steps:
 
-Docker Compose is chosen for the local environment.
+- Browser UI automation with Playwright.
+- Deterministic Web Crypto/key schedule tests.
+- Scripted Security Lab evidence under `docs/02-evaluation/` or a future dedicated evidence folder.
+- Benchmark outputs can be added later when real benchmark scripts exist.
 
-Reasons:
+### Manual Decrypt Helper
 
-- PostgreSQL can be started consistently across team machines.
-- The setup is easy to reset for demos.
-- It documents runtime dependencies in one file.
+`scripts/decrypt_message.mjs` mirrors the browser key schedule with Node Web Crypto:
 
-Not every service needs to be containerized during development. The MVP can run Node/Vite directly on the host while PostgreSQL runs in Docker.
+```powershell
+node scripts\decrypt_message.mjs --list
+node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
+```
 
-## 11. Decision Summary
+It needs the server JSON store plus a browser device export containing `privateKeyJwk`. This is a debugging/evidence tool only; exported private keys must stay outside git.
+
+## 9. Future Expansion Path
+
+| Future item | Why it may be useful | Current status |
+|---|---|---|
+| React + TypeScript + Vite | Larger UI, typed state, reusable components | Not used by current MVP |
+| Tailwind CSS | Faster repeated security-state styling | Not used by current MVP |
+| PostgreSQL | Durable relational storage and constraints | Not used by current MVP |
+| Prisma or SQLAlchemy | Reproducible schema/migrations | Reserved for later |
+| Playwright | Browser evidence for chat/key/admin states | Planned |
+| k6 or similar | Scenario benchmarks | Planned |
+
+## 10. Decision Summary
 
 | Decision | Main reason | Main trade-off |
 |---|---|---|
-| React + TypeScript + Vite | Fast typed UI development for chat and Security Lab | Separate backend app is required |
-| Tailwind CSS | Fast consistent security-state UI | Utility classes can become verbose |
-| IndexedDB + Dexie | Browser persistence for keys and ratchet state | Does not protect against XSS/malware |
-| Node.js + Fastify | Lightweight typed API and WebSocket server | Less built-in structure than NestJS |
-| PostgreSQL + Prisma | Strong relational model with type-safe access | ORM abstraction adds generated layer |
-| Argon2id | Strong password hashing choice for new systems | Needs parameter tuning |
-| JWT + refresh cookie | Stateless short-lived access with revocable refresh | Requires careful cookie/CSRF handling |
-| libsodium + noble hashes | Reviewed primitives and explicit key schedule | Adds browser crypto dependency size |
-| WebSocket | Transparent encrypted packet relay | Needs custom auth/reconnect handling |
-| Vitest + Playwright | Unit and browser proof for protocol and UX | Requires disciplined test design |
-| k6 + autocannon | Evidence for performance claims | Benchmarks must be documented carefully |
+| FastAPI | Small readable backend with REST, WebSocket, and tests | Python app is separate from browser JS protocol code |
+| Vanilla JS | No build step and direct Web Crypto access | Less type safety than TypeScript |
+| IndexedDB | Local private key persists across reloads | Does not protect against XSS/malware |
+| JSON demo store | Easy to inspect for lab evidence | Not production durable or relational |
+| Argon2id | Strong password hashing for login | Needs tuned parameters and dependency install |
+| HMAC-SHA256 JWT | Simple local authorization | Production should use stronger key management and a JWT library |
+| Web Crypto P-256/HKDF/AES-GCM | Reviewed browser primitives | Not a full Signal algorithm set |
+| Pytest + Node helper | Fast backend verification and manual ciphertext decrypt checks | Browser UI still needs automated tests |
 
-## 12. Reference Points
+## 11. Reference Points
 
-These references are used only to justify tool selection and design direction. The project still needs its own implementation, tests, and experiment results.
+These references justify tool selection and design direction. The project still needs its own implementation, tests, and experiment results.
 
-- React documentation: https://react.dev/
-- Vite guide: https://vite.dev/guide/
-- Tailwind CSS utility-first documentation: https://tailwindcss.com/docs/utility-first
-- TypeScript documentation: https://www.typescriptlang.org/docs/
-- Node.js documentation: https://nodejs.org/docs/latest/api/
-- Fastify documentation: https://fastify.dev/docs/
-- PostgreSQL documentation: https://www.postgresql.org/docs/
-- Prisma documentation: https://www.prisma.io/docs/orm
-- Dexie documentation: https://dexie.org/docs
-- Libsodium documentation: https://libsodium.gitbook.io/doc/
-- noble-hashes repository: https://github.com/paulmillr/noble-hashes
-- jose repository and documentation entry point: https://github.com/panva/jose
+- FastAPI documentation: https://fastapi.tiangolo.com/
+- Pytest documentation: https://docs.pytest.org/
+- MDN Web Crypto API: https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API
+- MDN IndexedDB API: https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
 - OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
-- Playwright documentation: https://playwright.dev/docs/intro
-- Vitest documentation: https://vitest.dev/
-- k6 documentation: https://k6.io/docs/
-- autocannon repository: https://github.com/mcollina/autocannon
-- Docker Compose documentation: https://docs.docker.com/compose/
+- OWASP JSON Web Token Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
+- PostgreSQL documentation for future database work: https://www.postgresql.org/docs/
+- Playwright documentation for future browser tests: https://playwright.dev/docs/intro

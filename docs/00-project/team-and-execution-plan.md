@@ -1,6 +1,6 @@
 # Team and Execution Plan
 
-This document defines the project team, role ownership, collaboration boundaries, milestones, and completion criteria.
+This document defines the project team, role ownership, collaboration boundaries, milestones, and completion criteria. It is aligned with the current FastAPI + browser Web Crypto MVP.
 
 ## 1. Institution
 
@@ -12,7 +12,7 @@ Ho Chi Minh City University of Technology and Engineering (HCM-UTE)
 |---:|---|---|---|
 | 1 | Ly Van Huu Hoa | [@hoalvh](https://github.com/hoalvh) | Application Security, Authentication, Backend Relay, Security Lab Backend |
 | 2 | Le Quang Minh | [@hnhat1234](https://github.com/hnhat1234) | Cryptographic Protocol, Key Schedule, Ratchet, Protocol Testing |
-| 3 | Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend Security UX, Client State, Evaluation UI |
+| 3 | Tran Quoc Truong | [@siberlly](https://github.com/siberlly) | Frontend Security UX, Client State, Admin/Demo UI |
 
 ## 3. Author Line
 
@@ -33,43 +33,38 @@ Maintainers: @hoalvh, @hnhat1234, @siberlly
 
 | Workstream | Primary Owner | Scope |
 |---|---|---|
-| Application Security and Security Lab Backend | Ly Van Huu Hoa | Auth API, JWT, refresh sessions, device/key APIs, WebSocket auth, ciphertext relay, lab attack endpoints |
-| Cryptographic Protocol and Ratchet Core | Le Quang Minh | E2EE packet format, key schedule, AEAD, symmetric ratchet, DH ratchet, replay rules, protocol tests |
-| Frontend Security UX and Evaluation UI | Tran Quoc Truong | React UI, device setup, chat UI, client storage integration, security states, Security Lab dashboard |
+| Application Security and Security Lab Backend | Ly Van Huu Hoa | FastAPI auth, JWT, refresh sessions, device/key APIs, WebSocket auth, ciphertext relay, lab endpoints |
+| Cryptographic Protocol and Ratchet Core | Le Quang Minh | Web Crypto E2EE packet format, key schedule, AEAD, simplified ratchet, PCS explanation, protocol tests |
+| Frontend Security UX and Admin/Demo UI | Tran Quoc Truong | Browser UI, IndexedDB client state, chat UX, key inspector, admin dashboard, screenshots |
 
 ## 5. Responsibility Matrix
 
 | Area | Ly Van Huu Hoa | Le Quang Minh | Tran Quoc Truong |
 |---|---:|---:|---:|
 | Repository hygiene and branch rules | Lead | Review | Review |
-| Backend foundation | Lead | Review | Integrate |
+| FastAPI backend foundation | Lead | Review | Integrate |
 | Register/login/JWT/refresh | Lead | Review | Integrate |
 | WebSocket authentication | Lead | Review | Integrate |
-| Database schema | Lead | Review | Review |
+| JSON demo store boundaries | Lead | Review | Review |
 | Device public key API | Lead | Review | Integrate |
 | E2EE packet format | Review | Lead | Integrate |
-| Key schedule and ratchet | Review | Lead | Integrate |
-| AEAD encryption/decryption | Review | Lead | Integrate |
+| Key schedule and ratchet concept | Review | Lead | Integrate |
+| AES-GCM encryption/decryption | Review | Lead | Integrate |
 | Replay/tamper protocol rules | Integrate | Lead | Integrate |
-| Client key storage | Review | Integrate | Lead |
+| IndexedDB client key storage | Review | Integrate | Lead |
 | Register/login UI | Integrate | Review | Lead |
-| Device setup UI | Integrate | Integrate | Lead |
 | Chat UI | Integrate | Integrate | Lead |
-| Safety number UI | Review | Review | Lead |
-| Key-change warning UI | Review | Review | Lead |
+| Fingerprint/key-change UI | Review | Review | Lead |
 | Security Lab backend | Lead | Integrate | Integrate |
-| Security Lab frontend | Integrate | Review | Lead |
+| Admin/evidence frontend | Integrate | Review | Lead |
 | Security experiments | Lead attack cases | Lead crypto cases | Lead UI evidence |
-| Benchmarks | Auth/server metrics | Crypto metrics | UI/E2E evidence |
+| Benchmarks | Auth/server metrics | Crypto metrics | UI/evidence metrics |
 | Final report sections | Threat model, auth, lab backend | Protocol, key schedule, PCS | UI/UX, screenshots, evaluation UI |
 | Final presentation sections | Attack demo | Crypto explanation | Product/security UX demo |
 
 ## 6. Integration Contracts
 
 ### 6.1. Auth and Frontend Contract
-
-Owner: Application Security workstream  
-Integrator: Frontend Security UX workstream
 
 Required endpoints:
 
@@ -83,51 +78,29 @@ GET  /me
 
 Required behavior:
 
-- Passwords are stored only as Argon2id hashes.
+- Passwords are stored only as password hashes.
 - Access JWTs are short-lived.
 - Refresh tokens are stored as HttpOnly cookies.
 - Auth errors are generic.
-- The frontend does not store long-lived tokens in localStorage.
+- The frontend does not store long-lived tokens in `localStorage`.
 
-### 6.2. Protocol and Frontend Contract
+### 6.2. Device and Protocol Contract
 
-Owner: Cryptographic Protocol workstream  
-Integrator: Frontend Security UX workstream
+Required behavior:
 
-Required client-facing functions:
+- Browser generates device private key.
+- Browser sends only public JWK and fingerprint to the server.
+- Backend rejects JWKs containing private field `d`.
+- Contact key lookup returns public key bundle only.
+- Fingerprint/key-change state is visible in the UI.
 
-```text
-generateDeviceIdentity()
-createPublicKeyBundle()
-verifyPublicKeyBundle()
-deriveSafetyNumber()
-initializeSession()
-encryptMessage()
-decryptMessage()
-advanceSymmetricRatchet()
-advanceDhRatchet()
-```
-
-Required protocol error codes:
-
-```text
-DECRYPT_FAILED
-REPLAY_DETECTED
-MESSAGE_TOO_OLD
-UNSUPPORTED_VERSION
-KEY_CHANGED
-INVALID_PREKEY_SIGNATURE
-```
-
-### 6.3. Backend and Protocol Contract
-
-Owner: Application Security workstream  
-Reviewer: Cryptographic Protocol workstream
+### 6.3. Backend and Message Contract
 
 Required behavior:
 
 - The server validates outer encrypted packet metadata.
 - The server never decrypts message ciphertext.
+- The server rejects packets containing plaintext.
 - The server stores public keys, ciphertext, and routing metadata only.
 - Lab endpoints simulate attacks without requiring plaintext access.
 
@@ -139,29 +112,19 @@ Primary folders:
 
 ```text
 apps/server/
-apps/server/src/auth/
-apps/server/src/devices/
-apps/server/src/keys/
-apps/server/src/messages/
-apps/server/src/websocket/
-apps/server/src/lab/
-prisma/
-experiments/server_compromise/
-experiments/jwt_theft/
-experiments/replay_tamper/
-experiments/key_substitution/
+apps/server/tests/
+docs/02-evaluation/
 ```
 
 Main deliverables:
 
-- Fastify backend foundation.
-- Prisma schema and migrations.
+- FastAPI backend foundation.
 - Register/login APIs.
 - Argon2id password hashing.
 - JWT access-token verification.
 - Refresh-token session management.
 - Device and public key APIs.
-- WebSocket ciphertext relay.
+- WebSocket ciphertext notification.
 - Security Lab backend endpoints.
 
 Validation checklist:
@@ -179,27 +142,22 @@ Validation checklist:
 Primary folders:
 
 ```text
-packages/protocol/
-packages/protocol/src/
-packages/protocol/tests/
-apps/web/src/crypto/
-experiments/forward_secrecy/
-experiments/post_compromise_security/
+apps/web/src/app.js
+docs/01-design/
+docs/02-evaluation/
 ```
 
 Main deliverables:
 
-- Shared protocol constants and packet types.
-- Device identity key generation.
-- Signed prekey generation and verification.
+- E2EE packet format.
+- Device key generation flow.
 - Public key bundle format.
-- Safety number derivation.
-- Initial session setup.
-- Symmetric ratchet.
-- DH ratchet.
-- AEAD message encryption/decryption.
+- Fingerprint derivation.
+- ECDH/HKDF/AES-GCM composition.
+- Simplified symmetric ratchet.
+- PCS/DH rekey explanation and metrics.
 - Replay protection rules.
-- Protocol test vectors.
+- Protocol test targets or vectors.
 
 Validation checklist:
 
@@ -207,9 +165,8 @@ Validation checklist:
 - Private keys remain client-side.
 - Message keys are unique per message.
 - Associated data covers important packet headers.
-- Replay and tamper failures return explicit error codes.
-- Old keys are removed from application state where practical.
-- FS and PCS behavior is covered by tests or experiments.
+- Replay and tamper failures are visible.
+- FS and PCS limitations are documented honestly.
 
 ### 7.3. Tran Quoc Truong
 
@@ -217,29 +174,24 @@ Primary folders:
 
 ```text
 apps/web/
-apps/web/src/auth/
-apps/web/src/session/
-apps/web/src/storage/
-apps/web/src/chat/
-apps/web/src/websocket/
-apps/web/src/lab/
-apps/web/src/shared/
-apps/web/tests/
+apps/web/src/
+docs/01-design/security-ux.md
+docs/02-evaluation/
 ```
 
 Main deliverables:
 
-- React + TypeScript + Vite frontend foundation.
-- Tailwind UI setup.
+- HTML/CSS/vanilla JS frontend.
 - Register/login UI.
-- Device setup UI.
-- IndexedDB/Dexie client state integration.
+- Contact list and manual contact opening.
+- IndexedDB client state integration.
 - One-to-one chat UI.
 - WebSocket client integration.
-- Safety number modal.
+- Fingerprint display.
 - Key-change warning.
 - Replay/tamper/decryption failure states.
-- Security Lab dashboard.
+- User chat key/fingerprint inspector.
+- Admin dashboard for server-side hashes/ciphertext/public keys.
 - Screenshot-ready evaluation views.
 
 Validation checklist:
@@ -248,7 +200,7 @@ Validation checklist:
 - Private keys are not sent to the backend.
 - Security states are visible with text, not color only.
 - Key-change and decrypt-failure warnings are prominent.
-- Lab results are readable and suitable for report screenshots.
+- Admin/lab evidence is readable and suitable for report screenshots.
 - UI works after page reload.
 - API and protocol contract changes are reflected in documentation.
 
@@ -258,10 +210,10 @@ Validation checklist:
 
 | Deliverable | Owner |
 |---|---|
-| Backend skeleton | Ly Van Huu Hoa |
-| Frontend skeleton | Tran Quoc Truong |
-| Protocol package skeleton | Le Quang Minh |
-| Prisma schema draft | Ly Van Huu Hoa |
+| FastAPI backend skeleton | Ly Van Huu Hoa |
+| Browser frontend skeleton | Tran Quoc Truong |
+| Protocol documentation skeleton | Le Quang Minh |
+| Repository hygiene docs | Shared |
 
 ### Milestone 2: Authentication and Device Setup
 
@@ -278,18 +230,17 @@ Validation checklist:
 | Deliverable | Owner |
 |---|---|
 | E2EE packet format | Le Quang Minh |
-| Initial session setup | Le Quang Minh |
-| Symmetric ratchet | Le Quang Minh |
-| WebSocket ciphertext relay | Ly Van Huu Hoa |
+| ECDH/HKDF/AES-GCM flow | Le Quang Minh |
+| Symmetric ratchet concept | Le Quang Minh |
+| Ciphertext relay | Ly Van Huu Hoa |
 | Chat UI integration | Tran Quoc Truong |
 
-### Milestone 4: DH Ratchet and Security UX
+### Milestone 4: Security UX
 
 | Deliverable | Owner |
 |---|---|
-| DH ratchet | Le Quang Minh |
 | Replay/tamper protocol rules | Le Quang Minh |
-| Safety number UI | Tran Quoc Truong |
+| Fingerprint display | Tran Quoc Truong |
 | Key-change warning UI | Tran Quoc Truong |
 | Lab attack hooks | Ly Van Huu Hoa |
 
@@ -300,14 +251,14 @@ Validation checklist:
 | Server compromise demo | Ly Van Huu Hoa |
 | Stolen JWT demo | Ly Van Huu Hoa |
 | Replay/tamper demo | Shared |
-| Forward secrecy experiment | Le Quang Minh |
-| PCS experiment | Le Quang Minh |
-| Lab dashboard and screenshots | Tran Quoc Truong |
+| Forward secrecy explanation | Le Quang Minh |
+| PCS metric | Le Quang Minh |
+| Admin dashboard and screenshots | Tran Quoc Truong |
 | Benchmark/result tables | Shared |
 
 ## 9. Branch Workflow
 
-All implementation work must happen on feature branches. The `main` branch is reserved for reviewed, demo-ready work.
+All implementation work should happen on feature branches. The `main` branch is reserved for reviewed, demo-ready work.
 
 Branch naming:
 
@@ -330,10 +281,8 @@ Pull request requirements:
 
 A task is complete only when:
 
-- Work is committed on a feature branch.
 - The implementation matches the relevant design document.
 - Sensitive values are not committed.
 - Tests or manual verification notes are included.
 - Affected documentation is updated.
-- At least one teammate reviews the pull request.
-
+- At least one teammate reviews the pull request when using PR workflow.

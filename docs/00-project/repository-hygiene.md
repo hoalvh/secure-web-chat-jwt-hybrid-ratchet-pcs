@@ -35,15 +35,13 @@ These files are safe and useful to commit:
 
 - `README.md`
 - `docs/**`
-- `apps/**` source code
-- `packages/**` source code
-- `prisma/schema.prisma`
-- `prisma/migrations/**`
-- `experiments/**` scripts and small result summaries
-- `benchmarks/**` scripts and selected result summaries
+- `apps/**` source code and tests
 - `.env.example`
-- `docker-compose.yml`
+- `requirements.txt`
+- `scripts/**`
 - `.gitignore`
+
+`scripts/decrypt_message.mjs` is safe to commit because it contains only the decrypt algorithm and CLI logic. The device JSON passed to it is not safe to commit.
 
 ## Do Not Commit
 
@@ -52,11 +50,17 @@ Never commit:
 - `.env`
 - `.env.local`
 - Real database URLs with production credentials.
-- JWT private keys.
-- Refresh-token secrets.
+- Real `JWT_SECRET` values.
+- Raw access tokens or refresh tokens.
 - Private device keys.
+- IndexedDB exports containing private JWK field `d`.
+- Device JSON files used with `scripts/decrypt_message.mjs`.
 - Ratchet state dumps.
 - Real user data.
+- `data/demo_store.json` from local runs.
+- `tmp/` exports, screenshots with secrets, or copied browser storage dumps.
+- `server*.log` or `*.err.log`.
+- `.venv/` or other virtual environments.
 - Generated `node_modules/`.
 - Build output such as `dist/` or `build/`.
 - Browser test artifacts such as `playwright-report/`.
@@ -64,32 +68,31 @@ Never commit:
 
 ## About `.env.example`
 
-`.env.example` is safe to commit because it contains example development values only. It should show which environment variables are required, but it must not contain real secrets.
+`.env.example` is safe to commit because it contains example development values only. It should show which environment variables are available, but it must not contain real secrets.
 
-Current example values such as `secure_chat` are acceptable for local Docker development. They are not production credentials.
-
-When implementation begins, developers should create a local `.env` file copied from `.env.example`:
+Current local demo variables include:
 
 ```text
-cp .env.example .env
+JWT_SECRET
+JWT_ISSUER
+JWT_AUDIENCE
+JWT_ACCESS_TOKEN_TTL_SECONDS
+REFRESH_COOKIE_NAME
+REFRESH_TOKEN_TTL_SECONDS
+SECURE_CHAT_DATA_DIR
 ```
 
-The `.env` file must stay local and is ignored by `.gitignore`.
-
-## Docker Compose Passwords
-
-The password in `docker-compose.yml` is a local development password for the Docker PostgreSQL container. It is acceptable for local demo use, but it should not be reused in production or deployment environments.
-
-If the project later adds deployment instructions, production secrets must be injected through the deployment platform's secret manager or environment-variable system.
+Developers may create a local `.env` or set variables directly in PowerShell. Local `.env` files must stay ignored.
 
 ## Before First Push
 
 Recommended checklist:
 
 - Confirm `.gitignore` exists.
-- Confirm `.env` does not exist in `git status`.
+- Confirm `.env` does not appear in `git status`.
 - Confirm no private keys are present.
-- Confirm no local IDE settings are staged.
+- Confirm no local JSON store or logs are staged.
+- Confirm no `tmp/*.json` device exports or IndexedDB private-key dumps are staged.
 - Confirm README links work.
 - Commit documentation and scaffold first.
 
@@ -102,7 +105,7 @@ git status --short
 Optional secret scan:
 
 ```text
-rg -n -i "(secret|password|token|private[_-]?key|BEGIN PRIVATE|DATABASE_URL)" .
+rg -n -i "(secret|password|token|private[_-]?key|BEGIN PRIVATE|DATABASE_URL|\\\"d\\\"\\s*:)" .
 ```
 
 False positives are expected in documentation, but real secret values should be removed.

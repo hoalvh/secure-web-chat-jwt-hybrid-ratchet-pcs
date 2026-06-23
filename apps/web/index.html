@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Secure Web Chat</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="auth-shell" id="authPanel">
+        <div class="auth-intro">
+          <div class="brand-row">
+            <div class="brand-mark">SC</div>
+            <div>
+              <h1>Secure Web Chat</h1>
+              <p>JWT access, browser keys, ciphertext relay.</p>
+            </div>
+          </div>
+          <div class="auth-flow">
+            <div>
+              <span>1</span>
+              <strong>Login</strong>
+              <small>Get a short-lived JWT.</small>
+            </div>
+            <div>
+              <span>2</span>
+              <strong>Device key</strong>
+              <small>Private key stays in IndexedDB.</small>
+            </div>
+            <div>
+              <span>3</span>
+              <strong>Chat</strong>
+              <small>Server stores ciphertext only.</small>
+            </div>
+          </div>
+        </div>
+
+        <form id="authForm" class="auth-card">
+          <div class="section-heading">
+            <span class="eyebrow">Session</span>
+            <h2>Sign in</h2>
+          </div>
+          <label>
+            Username
+            <input id="usernameInput" name="username" autocomplete="username" required />
+          </label>
+          <label>
+            Password
+            <input id="passwordInput" name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <div class="button-row">
+            <button type="submit" id="loginButton">Login</button>
+            <button type="button" id="registerButton" class="secondary">Register</button>
+          </div>
+          <pre id="authStatus" class="status-log"></pre>
+        </form>
+      </section>
+
+      <section class="app-layout" id="appPanel" hidden>
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">User chat</span>
+            <h2 id="sessionTitle">Encrypted chat</h2>
+          </div>
+          <div class="topbar-actions">
+            <span class="badge ok" id="deviceBadge">No device</span>
+            <span class="badge neutral" id="syncBadge">Live idle</span>
+            <button type="button" id="refreshButton" class="secondary">Refresh</button>
+            <button type="button" id="logoutButton" class="ghost">Logout</button>
+          </div>
+        </header>
+
+        <aside class="contacts-panel">
+          <div class="section-title">
+            <div>
+              <span class="eyebrow">People</span>
+              <h3>Contacts</h3>
+            </div>
+            <button type="button" id="loadUsersButton" class="icon-button" title="Reload contacts">R</button>
+          </div>
+          <div id="userList" class="user-list"></div>
+          <label class="manual-contact">
+            Open username
+            <div class="inline-form">
+              <input id="contactInput" placeholder="bob" />
+              <button type="button" id="openContactButton">Open</button>
+            </div>
+          </label>
+        </aside>
+
+        <section class="chat-panel">
+          <div class="chat-header">
+            <div>
+              <span class="eyebrow">Conversation</span>
+              <h3 id="conversationTitle">Select a contact</h3>
+              <p id="contactMeta" class="muted">Open a user to derive a shared key.</p>
+            </div>
+            <span class="badge neutral" id="cryptoBadge">AES-GCM idle</span>
+          </div>
+          <div id="messageList" class="message-list"></div>
+          <form id="messageForm" class="composer">
+            <input id="messageInput" placeholder="Write an encrypted message" autocomplete="off" disabled />
+            <button type="submit" id="sendButton" disabled>Send</button>
+          </form>
+        </section>
+
+        <aside class="key-inspector">
+          <div class="section-heading">
+            <span class="eyebrow">Keys</span>
+            <h3>Key inspector</h3>
+          </div>
+          <div class="key-status-row">
+            <span class="badge warn" id="trustBadge">No contact</span>
+          </div>
+          <dl class="key-facts">
+            <div>
+              <dt>Local device</dt>
+              <dd id="localDeviceId">-</dd>
+            </div>
+            <div>
+              <dt>Local fingerprint</dt>
+              <dd id="localKeyFingerprint">-</dd>
+            </div>
+            <div>
+              <dt>Peer</dt>
+              <dd id="keyOwner">-</dd>
+            </div>
+            <div>
+              <dt>Peer device</dt>
+              <dd id="keyDevice">-</dd>
+            </div>
+          </dl>
+          <div class="fingerprint-box">
+            <span>Peer fingerprint</span>
+            <pre id="fingerprintView">Select a contact to view the key fingerprint.</pre>
+          </div>
+        </aside>
+      </section>
+
+      <section class="admin-layout" id="adminPanel" hidden>
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Admin</span>
+            <h2 id="adminTitle">Server dashboard</h2>
+          </div>
+          <div class="topbar-actions">
+            <span class="badge neutral" id="adminStatus">Ready</span>
+            <button type="button" id="adminRefreshButton" class="secondary">Refresh</button>
+            <button type="button" id="adminLogoutButton" class="ghost">Logout</button>
+          </div>
+        </header>
+
+        <section class="admin-hero">
+          <div>
+            <span class="eyebrow">Server store</span>
+            <h3>What the server can see</h3>
+            <p class="muted" id="adminStoragePath"></p>
+          </div>
+          <div class="privacy-strip">
+            <span class="badge ok">No plaintext</span>
+            <span class="badge ok">No private keys</span>
+            <span class="badge warn">Hashes visible</span>
+          </div>
+        </section>
+
+        <section id="adminStats" class="stats-grid"></section>
+
+        <section class="admin-grid">
+          <article class="admin-section large">
+            <div class="section-title">
+              <div>
+                <span class="eyebrow">Messages</span>
+                <h3>Stored ciphertext</h3>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Message</th>
+                    <th>Route</th>
+                    <th>Nonce</th>
+                    <th>Ciphertext</th>
+                    <th>Tag</th>
+                    <th>Received</th>
+                  </tr>
+                </thead>
+                <tbody id="adminMessagesBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="admin-section">
+            <div class="section-title">
+              <div>
+                <span class="eyebrow">Accounts</span>
+                <h3>Password hashes</h3>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Role</th>
+                    <th>Password hash</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="admin-section">
+            <div class="section-title">
+              <div>
+                <span class="eyebrow">Devices</span>
+                <h3>Public keys</h3>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Device</th>
+                    <th>Fingerprint</th>
+                    <th>Public key</th>
+                  </tr>
+                </thead>
+                <tbody id="adminDevicesBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="admin-section">
+            <div class="section-title">
+              <div>
+                <span class="eyebrow">Sessions</span>
+                <h3>Refresh token hashes</h3>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Session</th>
+                    <th>Token hash</th>
+                    <th>Expires</th>
+                    <th>Revoked</th>
+                  </tr>
+                </thead>
+                <tbody id="adminSessionsBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="admin-section">
+            <div class="section-title">
+              <div>
+                <span class="eyebrow">Audit</span>
+                <h3>Security events</h3>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Actor</th>
+                    <th>Time</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody id="adminEventsBody"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>
