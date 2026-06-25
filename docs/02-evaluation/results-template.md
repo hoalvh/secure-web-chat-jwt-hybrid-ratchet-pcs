@@ -7,7 +7,7 @@ This document summarizes benchmark and security experiment results for the curre
 | Variant | Attack scenario | Messages exposed | Replay accepted | Tamper accepted | PCS recovery window | Notes |
 |---|---|---:|---:|---:|---:|---|
 | Plain relay | Server compromise | All plaintext if stored | N/A | N/A | N/A | Insecure baseline for explanation only |
-| Current Web Crypto demo | Server compromise | 0 plaintext rows expected | Lab endpoint only | AES-GCM expected reject | PCS metric only | FastAPI + JSON store + browser E2EE |
+| Current Web Crypto demo | Server compromise | 0 plaintext rows expected | Lab endpoint only | AES-GCM expected reject | PCS metric only | FastAPI + SQLite/PostgreSQL + browser E2EE |
 | Future full DH ratchet | State compromise | not yet implemented | not yet implemented | not yet implemented | not yet implemented | Expected recovery after real DH ratchet |
 
 ## Raw Data
@@ -37,7 +37,7 @@ Results are split into:
 | Run | Stored plaintext visible | Private keys visible | Ciphertext rows visible | Notes |
 |---|---:|---:|---:|---|
 | Baseline plain relay | yes, by design | N/A | N/A | Explanation baseline, not the current app |
-| Current E2EE demo | no | no | yes | JSON store/admin dashboard show hashes, public keys, nonce, ciphertext, tag |
+| Current E2EE demo | no | no | yes | Database/admin dashboard show hashes, public keys, nonce, ciphertext, tag |
 
 ### Stolen JWT
 
@@ -69,7 +69,7 @@ Results are split into:
 |---|---:|---:|---:|---|
 | Login with Argon2id | not yet measured | not yet measured | not yet measured | Parameters should be recorded |
 | JWT verification | not yet measured | not yet measured | not yet measured | HMAC-SHA256 in current FastAPI app |
-| Refresh token | not yet measured | not yet measured | not yet measured | Includes JSON store lookup |
+| Refresh token | not yet measured | not yet measured | not yet measured | Includes database lookup |
 
 ### Messaging and Crypto
 

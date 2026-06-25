@@ -12,6 +12,8 @@ const state = {
   adminData: null,
   ws: null,
   refreshTimer: null,
+  renderedKey: null,
+  decryptCache: new Map(),
 };
 
 const SESSION_KEY = "secure-chat-session";
@@ -445,15 +447,32 @@ function textOrDash(value) {
   return value === undefined || value === null || value === "" ? "-" : String(value);
 }
 
+function formatTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
 function appendCell(row, value, options = {}) {
   const cell = document.createElement("td");
   if (options.code) {
     const code = document.createElement("code");
-    code.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    code.textContent = text;
+    code.title = text; // full value on hover; cell itself is truncated
     cell.append(code);
   } else {
     cell.textContent = textOrDash(value);
   }
+  row.append(cell);
+}
+
+function appendBadgeCell(row, text, className) {
+  const cell = document.createElement("td");
+  const badge = document.createElement("span");
+  badge.className = className;
+  badge.textContent = text;
+  cell.append(badge);
   row.append(cell);
 }
 
@@ -472,19 +491,28 @@ function renderAdminStats(storage) {
   const items = [
     ["Users", storage.users],
     ["Devices", storage.devices],
+    ["Conversations", storage.conversations ?? 0],
     ["Messages", storage.messages],
     ["Sessions", storage.refresh_sessions],
     ["Events", storage.security_events],
   ];
   for (const [label, value] of items) {
-    const item = document.createElement("div");
-    item.className = "stat-item";
-    const name = document.createElement("span");
+    const col = document.createElement("div");
+    col.className = "col-6 col-sm-4 col-xl-2";
+    const card = document.createElement("div");
+    card.className = "card card-sm";
+    const body = document.createElement("div");
+    body.className = "card-body";
+    const name = document.createElement("div");
+    name.className = "subheader";
     name.textContent = label;
-    const number = document.createElement("strong");
+    const number = document.createElement("div");
+    number.className = "h1 m-0";
     number.textContent = value;
-    item.append(name, number);
-    stats.append(item);
+    body.append(name, number);
+    card.append(body);
+    col.append(card);
+    stats.append(col);
   }
 }
 
@@ -500,7 +528,7 @@ function renderAdminUsers(users) {
     appendCell(row, user.username);
     appendCell(row, user.is_admin ? "admin" : "user");
     appendCell(row, user.password_hash, { code: true });
-    appendCell(row, user.created_at);
+    appendCell(row, formatTime(user.created_at));
     tbody.append(row);
   }
 }
@@ -519,7 +547,7 @@ function renderAdminMessages(messages) {
     appendCell(row, message.nonce, { code: true });
     appendCell(row, message.ciphertext, { code: true });
     appendCell(row, message.tag, { code: true });
-    appendCell(row, message.server_received_at);
+    appendCell(row, formatTime(message.server_received_at));
     tbody.append(row);
   }
 }
@@ -553,8 +581,25 @@ function renderAdminSessions(sessions) {
     appendCell(row, session.user_id);
     appendCell(row, session.id, { code: true });
     appendCell(row, session.refresh_token_hash, { code: true });
-    appendCell(row, new Date(session.expires_at * 1000).toISOString());
-    appendCell(row, session.revoked_at || "-");
+    appendCell(row, formatTime(session.expires_at ? session.expires_at * 1000 : null));
+    appendCell(row, session.revoked_at ? formatTime(session.revoked_at) : "-");
+    tbody.append(row);
+  }
+}
+
+function renderAdminConversations(conversations) {
+  const tbody = $("#adminConversationsBody");
+  tbody.innerHTML = "";
+  if (!conversations.length) {
+    appendEmptyRow(tbody, 4, "No conversations");
+    return;
+  }
+  for (const conversation of conversations) {
+    const row = document.createElement("tr");
+    appendCell(row, conversation.id, { code: true });
+    appendCell(row, `${conversation.participant_a} ↔ ${conversation.participant_b}`);
+    appendCell(row, formatTime(conversation.created_at));
+    appendCell(row, formatTime(conversation.last_message_at));
     tbody.append(row);
   }
 }
@@ -563,14 +608,30 @@ function renderAdminEvents(events) {
   const tbody = $("#adminEventsBody");
   tbody.innerHTML = "";
   if (!events.length) {
-    appendEmptyRow(tbody, 4, "No security events");
+    appendEmptyRow(tbody, 6, "No security events");
     return;
   }
   for (const event of [...events].reverse()) {
     const row = document.createElement("tr");
+    const level = (event.severity || "info").toLowerCase();
+    appendBadgeCell(row, level, `sev sev-${level}`);
     appendCell(row, event.type);
-    appendCell(row, event.actor_user_id || "-");
-    appendCell(row, event.created_at);
+    appendCell(row, event.actor_user_id || "system");
+
+    const sourceCell = document.createElement("td");
+    sourceCell.className = "source-cell";
+    const ip = document.createElement("span");
+    ip.textContent = event.actor_ip || "-";
+    sourceCell.append(ip);
+    if (event.actor_user_agent) {
+      const agent = document.createElement("small");
+      agent.textContent = event.actor_user_agent;
+      agent.title = event.actor_user_agent;
+      sourceCell.append(agent);
+    }
+    row.append(sourceCell);
+
+    appendCell(row, formatTime(event.created_at));
     appendCell(row, event.detail || {}, { code: true });
     tbody.append(row);
   }
@@ -581,6 +642,7 @@ function renderAdminDashboard(data) {
   setText("#adminStoragePath", data.storage.store_file);
   renderAdminStats(data.storage);
   renderAdminUsers(data.users);
+  renderAdminConversations(data.conversations || []);
   renderAdminMessages(data.messages);
   renderAdminDevices(data.devices);
   renderAdminSessions(data.refresh_sessions);
@@ -621,7 +683,8 @@ async function openContact(username) {
   $("#sendButton").disabled = false;
   $("#cryptoBadge").className = "badge neutral";
   setText("#cryptoBadge", "ECDH ready");
-  await refreshMessages();
+  state.renderedKey = null; // force a fresh render when switching contacts
+  await refreshMessages({ force: true });
 }
 
 async function nextMessageNumber() {
@@ -636,28 +699,41 @@ async function nextMessageNumber() {
   return max + 1;
 }
 
-async function refreshMessages() {
+async function refreshMessages(options = {}) {
   if (!state.contact) return;
   const data = await api(`/messages/offline?peer=${encodeURIComponent(state.contact)}`);
-  state.lastMessages = data.messages.sort((a, b) => a.server_received_at.localeCompare(b.server_received_at));
-  const messageList = $("#messageList");
-  messageList.innerHTML = "";
-  if (!state.lastMessages.length) {
+  const messages = data.messages.sort((a, b) => a.server_received_at.localeCompare(b.server_received_at));
+  state.lastMessages = messages;
+
+  // Only touch the DOM when the conversation actually changed. The 2.5s poll
+  // (and WebSocket pushes) otherwise rebuilt the whole list every time, which
+  // made the chat flicker continuously.
+  const signature = messages.map((message) => message.id).join("|");
+  if (!options.force && signature === state.renderedKey) return;
+
+  const fragment = document.createDocumentFragment();
+  if (!messages.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state conversation-empty";
     empty.textContent = "No messages in this conversation";
-    messageList.append(empty);
+    fragment.append(empty);
   }
-  for (const message of state.lastMessages) {
+  for (const message of messages) {
     const packet = message.packet;
-    let body = "";
+    const cacheKey = packetKey(packet);
+    let body;
     let failed = false;
-    try {
-      body = await decryptPacket(packet);
-      state.packetIds.add(packetKey(packet));
-    } catch (error) {
-      body = `Decrypt failed: ${error.message}`;
-      failed = true;
+    if (state.decryptCache.has(cacheKey)) {
+      body = state.decryptCache.get(cacheKey);
+    } else {
+      try {
+        body = await decryptPacket(packet);
+        state.packetIds.add(cacheKey);
+        state.decryptCache.set(cacheKey, body); // cache so re-renders skip crypto
+      } catch (error) {
+        body = `Decrypt failed: ${error.message}`;
+        failed = true;
+      }
     }
     const bubble = document.createElement("article");
     bubble.className = `message ${packet.header.sender_user_id === state.user.id ? "me" : ""}`;
@@ -669,8 +745,12 @@ async function refreshMessages() {
     text.className = "body";
     text.textContent = body;
     bubble.append(meta, text);
-    messageList.append(bubble);
+    fragment.append(bubble);
   }
+  // Swap the whole list in one atomic operation (no empty flash).
+  const messageList = $("#messageList");
+  messageList.replaceChildren(fragment);
+  state.renderedKey = signature;
   messageList.scrollTop = messageList.scrollHeight;
   $("#cryptoBadge").className = "badge ok";
   setText("#cryptoBadge", "AES-GCM active");
@@ -751,6 +831,8 @@ async function logout() {
   state.keyBundles.clear();
   state.packetIds.clear();
   state.lastMessages = [];
+  state.renderedKey = null;
+  state.decryptCache.clear();
   state.adminData = null;
   clearSession();
   $("#appPanel").hidden = true;

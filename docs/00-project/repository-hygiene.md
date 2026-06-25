@@ -57,7 +57,7 @@ Never commit:
 - Device JSON files used with `scripts/decrypt_message.mjs`.
 - Ratchet state dumps.
 - Real user data.
-- `data/demo_store.json` from local runs.
+- The local database from runs: `data/secure_chat.db` (and `-wal` / `-shm`) and any legacy `data/demo_store.json`.
 - `tmp/` exports, screenshots with secrets, or copied browser storage dumps.
 - `server*.log` or `*.err.log`.
 - `.venv/` or other virtual environments.
@@ -80,7 +80,14 @@ JWT_ACCESS_TOKEN_TTL_SECONDS
 REFRESH_COOKIE_NAME
 REFRESH_TOKEN_TTL_SECONDS
 SECURE_CHAT_DATA_DIR
+DATABASE_URL
+COOKIE_SECURE
+CORS_ORIGINS
 ```
+
+`DATABASE_URL` is empty for local SQLite; for deployment it holds the managed
+Postgres connection string and must be kept out of git. `COOKIE_SECURE=true` and
+`CORS_ORIGINS` are production (HTTPS) switches.
 
 Developers may create a local `.env` or set variables directly in PowerShell. Local `.env` files must stay ignored.
 
@@ -91,7 +98,7 @@ Recommended checklist:
 - Confirm `.gitignore` exists.
 - Confirm `.env` does not appear in `git status`.
 - Confirm no private keys are present.
-- Confirm no local JSON store or logs are staged.
+- Confirm no local database (`data/secure_chat.db*`), JSON store, or logs are staged.
 - Confirm no `tmp/*.json` device exports or IndexedDB private-key dumps are staged.
 - Confirm README links work.
 - Commit documentation and scaffold first.

@@ -8,9 +8,8 @@ import json
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import timedelta
 from pathlib import Path
-from threading import RLock
 from typing import Any
 
 try:
@@ -26,6 +25,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
@@ -35,12 +35,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select
+
+from apps.server.db import (
+    Conversation,
+    DATABASE_URL,
+    Device,
+    Message,
+    RefreshSession,
+    SecurityEvent,
+    SessionLocal,
+    User,
+    init_db,
+    reset_db,
+    safe_database_label,
+    utcnow,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 WEB_DIR = ROOT_DIR / "apps" / "web"
-DATA_DIR = Path(os.getenv("SECURE_CHAT_DATA_DIR", ROOT_DIR / "data"))
-STORE_FILE = DATA_DIR / "demo_store.json"
 
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
 JWT_ISSUER = os.getenv("JWT_ISSUER", "secure-chat-server")
@@ -48,15 +62,20 @@ JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "secure-chat-web")
 ACCESS_TTL_SECONDS = int(os.getenv("JWT_ACCESS_TOKEN_TTL_SECONDS", "900"))
 REFRESH_TTL_SECONDS = int(os.getenv("REFRESH_TOKEN_TTL_SECONDS", "604800"))
 REFRESH_COOKIE_NAME = os.getenv("REFRESH_COOKIE_NAME", "secure_chat_refresh")
+# Refresh/session cookies must be Secure in production (HTTPS). Keep it off for
+# the local HTTP demo and flip it on with COOKIE_SECURE=true behind TLS.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes"}
+# Extra browser origins allowed for CORS, comma separated (e.g. your domain).
+EXTRA_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
 ADMIN_USERNAMES = {
     username.strip().lower()
     for username in os.getenv("ADMIN_USERNAMES", "admin").split(",")
     if username.strip()
 }
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def base64url_encode(data: bytes) -> str:
@@ -97,42 +116,24 @@ def user_is_admin(user: dict[str, Any]) -> bool:
     return bool(user.get("is_admin")) or username_is_admin(user["id"])
 
 
-def initial_store() -> dict[str, Any]:
-    return {
-        "users": {},
-        "refresh_sessions": {},
-        "devices": {},
-        "messages": [],
-        "security_events": [],
-    }
+def client_ip(request: Request | None) -> str | None:
+    if request is None or request.client is None:
+        return None
+    # Honour the first X-Forwarded-For hop when running behind a reverse proxy.
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host
 
 
-class JsonStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.lock = RLock()
-        self.data = initial_store()
-        self.load()
-
-    def load(self) -> None:
-        with self.lock:
-            if self.path.exists():
-                self.data = json.loads(self.path.read_text(encoding="utf-8"))
-            else:
-                self.persist()
-
-    def persist(self) -> None:
-        with self.lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-
-    def reset(self) -> None:
-        with self.lock:
-            self.data = initial_store()
-            self.persist()
+def client_user_agent(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    agent = request.headers.get("user-agent")
+    return agent[:256] if agent else None
 
 
-store = JsonStore(STORE_FILE)
+init_db()
 
 if PasswordHasher is not None:
     password_hasher = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=2)
@@ -199,8 +200,16 @@ def verify_jwt(token: str) -> dict[str, Any]:
     return payload
 
 
+def cleanup_expired_sessions() -> None:
+    """Delete refresh sessions whose absolute lifetime has passed."""
+    with SessionLocal() as session:
+        session.execute(delete(RefreshSession).where(RefreshSession.expires_at < utcnow()))
+        session.commit()
+
+
 def issue_tokens(user_id: str, response: Response) -> dict[str, Any]:
-    issued_at = int(time.time())
+    issued_epoch = int(time.time())
+    issued_at = utcnow()
     session_id = secrets.token_urlsafe(18)
     refresh_token = secrets.token_urlsafe(36)
     access_payload = {
@@ -208,28 +217,30 @@ def issue_tokens(user_id: str, response: Response) -> dict[str, Any]:
         "username": user_id,
         "session_id": session_id,
         "jti": secrets.token_urlsafe(12),
-        "iat": issued_at,
-        "exp": issued_at + ACCESS_TTL_SECONDS,
+        "iat": issued_epoch,
+        "exp": issued_epoch + ACCESS_TTL_SECONDS,
         "iss": JWT_ISSUER,
         "aud": JWT_AUDIENCE,
     }
     refresh_hash = sha256_hex(refresh_token)
-    with store.lock:
-        store.data["refresh_sessions"][session_id] = {
-            "id": session_id,
-            "user_id": user_id,
-            "refresh_token_hash": refresh_hash,
-            "created_at": now_iso(),
-            "expires_at": issued_at + REFRESH_TTL_SECONDS,
-            "revoked_at": None,
-        }
-        store.persist()
+    with SessionLocal() as session:
+        session.add(
+            RefreshSession(
+                id=session_id,
+                user_id=user_id,
+                refresh_token_hash=refresh_hash,
+                created_at=issued_at,
+                expires_at=issued_at + timedelta(seconds=REFRESH_TTL_SECONDS),
+                revoked_at=None,
+            )
+        )
+        session.commit()
 
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=refresh_token,
         httponly=True,
-        secure=False,
+        secure=COOKIE_SECURE,
         samesite="lax",
         max_age=REFRESH_TTL_SECONDS,
     )
@@ -242,13 +253,16 @@ def issue_tokens(user_id: str, response: Response) -> dict[str, Any]:
 
 
 def public_user(user_id: str) -> dict[str, Any]:
-    user = store.data["users"][user_id]
-    return {
-        "id": user["id"],
-        "username": user["username"],
-        "is_admin": user_is_admin(user),
-        "created_at": user["created_at"],
-    }
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {
+            "id": user.id,
+            "username": user.username,
+            "is_admin": user_is_admin(user.as_dict()),
+            "created_at": user.as_dict()["created_at"],
+        }
 
 
 def current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -257,10 +271,11 @@ def current_user(authorization: str | None = Header(default=None)) -> dict[str, 
     token = authorization.split(" ", 1)[1].strip()
     payload = verify_jwt(token)
     user_id = payload["sub"]
-    with store.lock:
-        if user_id not in store.data["users"]:
+    with SessionLocal() as session:
+        user = session.get(User, user_id)
+        if user is None:
             raise HTTPException(status_code=401, detail="User no longer exists")
-        return store.data["users"][user_id]
+        return user.as_dict()
 
 
 def require_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
@@ -269,30 +284,53 @@ def require_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any
     return user
 
 
-def record_event(event_type: str, actor_user_id: str | None, detail: dict[str, Any]) -> None:
-    with store.lock:
-        store.data["security_events"].append(
-            {
-                "id": "evt_" + secrets.token_urlsafe(10),
-                "type": event_type,
-                "actor_user_id": actor_user_id,
-                "detail": detail,
-                "created_at": now_iso(),
-            }
+def record_event(
+    event_type: str,
+    actor_user_id: str | None,
+    detail: dict[str, Any],
+    severity: str = "info",
+    request: Request | None = None,
+) -> None:
+    with SessionLocal() as session:
+        session.add(
+            SecurityEvent(
+                id="evt_" + secrets.token_urlsafe(10),
+                type=event_type,
+                severity=severity,
+                actor_user_id=actor_user_id,
+                actor_ip=client_ip(request),
+                actor_user_agent=client_user_agent(request),
+                detail=detail,
+                created_at=utcnow(),
+            )
         )
-        store.persist()
+        session.commit()
 
 
-def latest_device_for_user(user_id: str) -> dict[str, Any] | None:
-    devices = [
-        device
-        for device in store.data["devices"].values()
-        if device["user_id"] == user_id and device.get("revoked_at") is None
-    ]
-    if not devices:
-        return None
-    devices.sort(key=lambda item: item["created_at"], reverse=True)
-    return devices[0]
+def latest_device_for_user(session, user_id: str) -> Device | None:
+    stmt = (
+        select(Device)
+        .where(Device.user_id == user_id, Device.revoked_at.is_(None))
+        .order_by(Device.created_at.desc())
+    )
+    return session.scalars(stmt).first()
+
+
+def ensure_conversation(session, conversation_id: str, sender: str, recipient: str) -> None:
+    conversation = session.get(Conversation, conversation_id)
+    if conversation is None:
+        participant_a, participant_b = sorted([sender, recipient])
+        session.add(
+            Conversation(
+                id=conversation_id,
+                participant_a=participant_a,
+                participant_b=participant_b,
+                created_at=utcnow(),
+                last_message_at=utcnow(),
+            )
+        )
+    else:
+        conversation.last_message_at = utcnow()
 
 
 def store_message(packet: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
@@ -304,26 +342,35 @@ def store_message(packet: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
     recipient_user_id = header.get("recipient_user_id")
     if sender_user_id != actor_user_id:
         raise HTTPException(status_code=403, detail="Sender does not match access token")
-    if recipient_user_id not in store.data["users"]:
-        raise HTTPException(status_code=404, detail="Recipient does not exist")
     required = ["version", "conversation_id", "message_number"]
     if any(key not in header for key in required):
         raise HTTPException(status_code=400, detail="Encrypted packet header is incomplete")
     if "ciphertext" not in packet or "nonce" not in packet or "tag" not in packet:
         raise HTTPException(status_code=400, detail="Encrypted packet body is incomplete")
 
-    message = {
-        "id": "msg_" + secrets.token_urlsafe(12),
-        "sender_user_id": sender_user_id,
-        "recipient_user_id": recipient_user_id,
-        "packet": packet,
-        "server_received_at": now_iso(),
-        "delivered_at": None,
-    }
-    with store.lock:
-        store.data["messages"].append(message)
-        store.persist()
-    return message
+    try:
+        message_number = int(header["message_number"])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="message_number must be an integer") from exc
+
+    conversation_id = header["conversation_id"]
+    with SessionLocal() as session:
+        if session.get(User, recipient_user_id) is None:
+            raise HTTPException(status_code=404, detail="Recipient does not exist")
+        ensure_conversation(session, conversation_id, sender_user_id, recipient_user_id)
+        message = Message(
+            id="msg_" + secrets.token_urlsafe(12),
+            conversation_id=conversation_id,
+            sender_user_id=sender_user_id,
+            recipient_user_id=recipient_user_id,
+            message_number=message_number,
+            packet=packet,
+            server_received_at=utcnow(),
+            delivered_at=None,
+        )
+        session.add(message)
+        session.commit()
+        return message.as_dict()
 
 
 class AuthRequest(BaseModel):
@@ -364,7 +411,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000", *EXTRA_CORS_ORIGINS],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -373,42 +420,54 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    with SessionLocal() as session:
+        user_count = session.scalar(select(func.count()).select_from(User)) or 0
+        message_count = session.scalar(select(func.count()).select_from(Message)) or 0
     return {
         "ok": True,
         "service": "secure-web-chat",
         "password_hasher": "argon2id" if password_hasher is not None else "scrypt-dev-fallback",
-        "users": len(store.data["users"]),
-        "messages": len(store.data["messages"]),
+        "database": "sqlite" if DATABASE_URL.startswith("sqlite") else "postgresql",
+        "users": user_count,
+        "messages": message_count,
     }
 
 
 @app.post("/auth/register")
-def register(payload: AuthRequest, response: Response) -> dict[str, Any]:
+def register(payload: AuthRequest, request: Request, response: Response) -> dict[str, Any]:
     username = normalize_username(payload.username)
-    with store.lock:
-        if username in store.data["users"]:
+    with SessionLocal() as session:
+        if session.get(User, username) is not None:
             raise HTTPException(status_code=409, detail="Username already exists")
-        store.data["users"][username] = {
-            "id": username,
-            "username": username,
-            "password_hash": hash_password(payload.password),
-            "is_admin": username_is_admin(username),
-            "created_at": now_iso(),
-            "updated_at": now_iso(),
-        }
-        store.persist()
-    record_event("USER_REGISTERED", username, {"username": username})
+        now = utcnow()
+        session.add(
+            User(
+                id=username,
+                username=username,
+                password_hash=hash_password(payload.password),
+                is_admin=username_is_admin(username),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+    record_event("USER_REGISTERED", username, {"username": username}, request=request)
     return issue_tokens(username, response)
 
 
 @app.post("/auth/login")
-def login(payload: AuthRequest, response: Response) -> dict[str, Any]:
+def login(payload: AuthRequest, request: Request, response: Response) -> dict[str, Any]:
     username = normalize_username(payload.username)
-    with store.lock:
-        user = store.data["users"].get(username)
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    with SessionLocal() as session:
+        user = session.get(User, username)
+        stored_hash = user.password_hash if user else None
+    if not stored_hash or not verify_password(payload.password, stored_hash):
+        record_event(
+            "LOGIN_FAILED", None, {"username": username}, severity="warning", request=request
+        )
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    record_event("USER_LOGIN", username, {"username": username})
+    cleanup_expired_sessions()
+    record_event("USER_LOGIN", username, {"username": username}, request=request)
     return issue_tokens(username, response)
 
 
@@ -418,16 +477,18 @@ def refresh(response: Response, secure_chat_refresh: str | None = Cookie(default
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
     token_hash = sha256_hex(refresh_token)
-    now = int(time.time())
-    with store.lock:
-        for session in store.data["refresh_sessions"].values():
-            if (
-                session["refresh_token_hash"] == token_hash
-                and session["revoked_at"] is None
-                and session["expires_at"] > now
-            ):
-                return issue_tokens(session["user_id"], response)
-    raise HTTPException(status_code=401, detail="Invalid refresh token")
+    with SessionLocal() as session:
+        stmt = select(RefreshSession).where(
+            RefreshSession.refresh_token_hash == token_hash,
+            RefreshSession.revoked_at.is_(None),
+            RefreshSession.expires_at > utcnow(),
+        )
+        match = session.scalars(stmt).first()
+        user_id = match.user_id if match else None
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    cleanup_expired_sessions()
+    return issue_tokens(user_id, response)
 
 
 @app.post("/auth/logout")
@@ -437,11 +498,14 @@ def logout(
     secure_chat_refresh: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     token_hash = sha256_hex(secure_chat_refresh or "")
-    with store.lock:
-        for session in store.data["refresh_sessions"].values():
-            if session["user_id"] == user["id"] and session["refresh_token_hash"] == token_hash:
-                session["revoked_at"] = now_iso()
-        store.persist()
+    with SessionLocal() as session:
+        stmt = select(RefreshSession).where(
+            RefreshSession.user_id == user["id"],
+            RefreshSession.refresh_token_hash == token_hash,
+        )
+        for match in session.scalars(stmt):
+            match.revoked_at = utcnow()
+        session.commit()
     response.delete_cookie(REFRESH_COOKIE_NAME)
     return {"ok": True}
 
@@ -453,55 +517,48 @@ def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
 
 @app.get("/users")
 def users(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with store.lock:
-        current_is_admin = user_is_admin(user)
+    current_is_admin = user_is_admin(user)
+    with SessionLocal() as session:
+        rows = session.scalars(select(User).order_by(User.id)).all()
         items = [
-            public_user(user_id)
-            for user_id in sorted(store.data["users"])
-            if user_id != user["id"]
-            and (current_is_admin or not user_is_admin(store.data["users"][user_id]))
+            {
+                "id": row.id,
+                "username": row.username,
+                "is_admin": user_is_admin(row.as_dict()),
+                "created_at": row.as_dict()["created_at"],
+            }
+            for row in rows
+            if row.id != user["id"]
+            and (current_is_admin or not user_is_admin(row.as_dict()))
         ]
     return {"users": items}
 
 
 @app.get("/admin/dashboard")
-def admin_dashboard(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    with store.lock:
+def admin_dashboard(request: Request, admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    with SessionLocal() as session:
         users = [
             {
-                "id": item["id"],
-                "username": item["username"],
-                "is_admin": user_is_admin(item),
-                "password_hash": item["password_hash"],
-                "created_at": item["created_at"],
-                "updated_at": item.get("updated_at"),
+                "id": item.id,
+                "username": item.username,
+                "is_admin": user_is_admin(item.as_dict()),
+                "password_hash": item.password_hash,
+                "created_at": item.as_dict()["created_at"],
+                "updated_at": item.as_dict()["updated_at"],
             }
-            for item in sorted(store.data["users"].values(), key=lambda row: row["username"])
+            for item in session.scalars(select(User).order_by(User.username)).all()
         ]
-        devices = [
-            {
-                "id": item["id"],
-                "user_id": item["user_id"],
-                "device_label": item["device_label"],
-                "fingerprint": item["fingerprint"],
-                "identity_public_key": item["identity_public_key"],
-                "created_at": item["created_at"],
-                "last_seen_at": item.get("last_seen_at"),
-                "revoked_at": item.get("revoked_at"),
-            }
-            for item in sorted(store.data["devices"].values(), key=lambda row: row["id"])
-        ]
+        devices = [item.as_dict() for item in session.scalars(select(Device).order_by(Device.id)).all()]
         messages = []
-        for item in store.data["messages"]:
-            packet = item["packet"]
-            header = packet.get("header", {})
+        for item in session.scalars(select(Message).order_by(Message.seq)).all():
+            packet = item.packet
             messages.append(
                 {
-                    "id": item["id"],
-                    "sender_user_id": item["sender_user_id"],
-                    "recipient_user_id": item["recipient_user_id"],
-                    "conversation_id": header.get("conversation_id"),
-                    "message_number": header.get("message_number"),
+                    "id": item.id,
+                    "sender_user_id": item.sender_user_id,
+                    "recipient_user_id": item.recipient_user_id,
+                    "conversation_id": item.conversation_id,
+                    "message_number": item.message_number,
                     "algorithm": packet.get("algorithm"),
                     "nonce": packet.get("nonce"),
                     "ciphertext": packet.get("ciphertext"),
@@ -509,40 +566,45 @@ def admin_dashboard(admin: dict[str, Any] = Depends(require_admin)) -> dict[str,
                     "packet": packet,
                     "plaintext": None,
                     "plaintext_exposed": False,
-                    "server_received_at": item["server_received_at"],
-                    "delivered_at": item.get("delivered_at"),
+                    "server_received_at": item.as_dict()["server_received_at"],
+                    "delivered_at": item.as_dict()["delivered_at"],
                 }
             )
         refresh_sessions = [
-            {
-                "id": item["id"],
-                "user_id": item["user_id"],
-                "refresh_token_hash": item["refresh_token_hash"],
-                "created_at": item["created_at"],
-                "expires_at": item["expires_at"],
-                "revoked_at": item.get("revoked_at"),
-            }
-            for item in sorted(store.data["refresh_sessions"].values(), key=lambda row: row["created_at"])
+            item.as_dict()
+            for item in session.scalars(
+                select(RefreshSession).order_by(RefreshSession.created_at)
+            ).all()
         ]
-        events = copy.deepcopy(store.data["security_events"][-100:])
+        conversations = [
+            item.as_dict()
+            for item in session.scalars(
+                select(Conversation).order_by(Conversation.created_at)
+            ).all()
+        ]
+        event_rows = session.scalars(select(SecurityEvent).order_by(SecurityEvent.seq)).all()
+        events = [item.as_dict() for item in event_rows][-100:]
 
     record_event(
         "ADMIN_DASHBOARD_VIEWED",
         admin["id"],
         {"visible_users": len(users), "visible_messages": len(messages)},
+        request=request,
     )
     return {
         "admin": public_user(admin["id"]),
         "storage": {
-            "store_file": str(STORE_FILE),
+            "store_file": safe_database_label(),
             "users": len(users),
             "devices": len(devices),
+            "conversations": len(conversations),
             "messages": len(messages),
             "refresh_sessions": len(refresh_sessions),
             "security_events": len(events),
         },
         "users": users,
         "devices": devices,
+        "conversations": conversations,
         "messages": messages,
         "refresh_sessions": refresh_sessions,
         "security_events": events,
@@ -552,74 +614,83 @@ def admin_dashboard(admin: dict[str, Any] = Depends(require_admin)) -> dict[str,
 @app.post("/devices")
 def create_or_update_device(
     payload: DeviceRequest,
+    request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     if "d" in payload.public_key_jwk:
         raise HTTPException(status_code=400, detail="Private key material is not allowed")
 
     device_id = payload.device_id or f"{user['id']}-browser"
-    device = {
-        "id": device_id,
-        "user_id": user["id"],
-        "device_label": payload.device_label.strip()[:80] or "browser",
-        "identity_public_key": payload.public_key_jwk,
-        "fingerprint": payload.fingerprint,
-        "created_at": now_iso(),
-        "last_seen_at": now_iso(),
-        "revoked_at": None,
-    }
-    with store.lock:
-        existing = store.data["devices"].get(device_id)
-        if existing and existing["user_id"] != user["id"]:
+    with SessionLocal() as session:
+        existing = session.get(Device, device_id)
+        if existing and existing.user_id != user["id"]:
             raise HTTPException(status_code=409, detail="Device id belongs to another user")
-        if existing and existing["fingerprint"] != payload.fingerprint:
-            record_event(
-                "KEY_SUBSTITUTION_WARNING",
-                user["id"],
-                {
+
+        created_at = utcnow()
+        substitution = None
+        if existing:
+            created_at = existing.created_at
+            if existing.fingerprint != payload.fingerprint:
+                substitution = {
                     "device_id": device_id,
-                    "old_fingerprint": existing["fingerprint"],
+                    "old_fingerprint": existing.fingerprint,
                     "new_fingerprint": payload.fingerprint,
-                },
-            )
-            device["created_at"] = existing["created_at"]
-        store.data["devices"][device_id] = device
-        store.persist()
-    return {"device": device}
+                }
+            device = existing
+        else:
+            device = Device(id=device_id)
+            session.add(device)
+
+        device.user_id = user["id"]
+        device.device_label = payload.device_label.strip()[:80] or "browser"
+        device.identity_public_key = payload.public_key_jwk
+        device.fingerprint = payload.fingerprint
+        device.created_at = created_at
+        device.last_seen_at = utcnow()
+        device.revoked_at = None
+        session.commit()
+        result = device.as_dict()
+
+    if substitution is not None:
+        record_event(
+            "KEY_SUBSTITUTION_WARNING", user["id"], substitution, severity="warning", request=request
+        )
+    return {"device": result}
 
 
 @app.get("/devices")
 def list_devices(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with store.lock:
-        devices = [
-            device
-            for device in store.data["devices"].values()
-            if device["user_id"] == user["id"] and device.get("revoked_at") is None
-        ]
+    with SessionLocal() as session:
+        stmt = select(Device).where(
+            Device.user_id == user["id"], Device.revoked_at.is_(None)
+        )
+        devices = [device.as_dict() for device in session.scalars(stmt).all()]
     return {"devices": devices}
 
 
 @app.get("/keys/bundle/{username}")
 def key_bundle(username: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     target = normalize_username(username)
-    with store.lock:
-        if target not in store.data["users"]:
+    with SessionLocal() as session:
+        if session.get(User, target) is None:
             raise HTTPException(status_code=404, detail="User does not exist")
-        device = latest_device_for_user(target)
-    if not device:
-        raise HTTPException(status_code=404, detail="User has no device key")
-    return {
-        "user_id": target,
-        "device_id": device["id"],
-        "identity_public_key": device["identity_public_key"],
-        "fingerprint": device["fingerprint"],
-        "created_at": device["created_at"],
-    }
+        device = latest_device_for_user(session, target)
+        if not device:
+            raise HTTPException(status_code=404, detail="User has no device key")
+        bundle = {
+            "user_id": target,
+            "device_id": device.id,
+            "identity_public_key": device.identity_public_key,
+            "fingerprint": device.fingerprint,
+            "created_at": device.as_dict()["created_at"],
+        }
+    return bundle
 
 
 @app.post("/messages")
 async def post_message(
     payload: MessageRequest,
+    request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     message = store_message(payload.packet, user["id"])
@@ -627,6 +698,7 @@ async def post_message(
         "CIPHERTEXT_STORED",
         user["id"],
         {"message_id": message["id"], "recipient_user_id": message["recipient_user_id"]},
+        request=request,
     )
     await manager.send(message["recipient_user_id"], {"type": "encrypted_message", "message": message})
     return {"message": message}
@@ -638,84 +710,127 @@ def offline_messages(
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     peer_id = normalize_username(peer) if peer else None
-    with store.lock:
+    with SessionLocal() as session:
+        rows = session.scalars(select(Message).order_by(Message.seq)).all()
         messages = []
-        for message in store.data["messages"]:
-            involves_user = user["id"] in (message["sender_user_id"], message["recipient_user_id"])
+        for message in rows:
+            involves_user = user["id"] in (message.sender_user_id, message.recipient_user_id)
             involves_peer = (
                 peer_id is None
-                or peer_id in (message["sender_user_id"], message["recipient_user_id"])
+                or peer_id in (message.sender_user_id, message.recipient_user_id)
             )
             if involves_user and involves_peer:
-                messages.append(message)
+                messages.append(message.as_dict())
     return {"messages": messages}
 
 
 @app.get("/lab/messages")
-def lab_messages(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with store.lock:
-        rows = []
-        for message in store.data["messages"]:
-            if user["id"] not in (message["sender_user_id"], message["recipient_user_id"]):
+def lab_messages(request: Request, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with SessionLocal() as session:
+        rows = session.scalars(select(Message).order_by(Message.seq)).all()
+        result = []
+        for message in rows:
+            if user["id"] not in (message.sender_user_id, message.recipient_user_id):
                 continue
-            packet = message["packet"]
-            rows.append(
+            packet = message.packet
+            result.append(
                 {
-                    "id": message["id"],
-                    "sender_user_id": message["sender_user_id"],
-                    "recipient_user_id": message["recipient_user_id"],
-                    "message_number": packet.get("header", {}).get("message_number"),
+                    "id": message.id,
+                    "sender_user_id": message.sender_user_id,
+                    "recipient_user_id": message.recipient_user_id,
+                    "message_number": message.message_number,
                     "nonce": packet.get("nonce"),
                     "ciphertext": packet.get("ciphertext"),
                     "tag": packet.get("tag"),
                     "plaintext": None,
                     "plaintext_exposed": False,
-                    "server_received_at": message["server_received_at"],
+                    "server_received_at": message.as_dict()["server_received_at"],
                 }
             )
-    record_event("SERVER_COMPROMISE_VIEWED", user["id"], {"visible_rows": len(rows)})
-    return {"messages": rows}
+    record_event(
+        "SERVER_COMPROMISE_VIEWED",
+        user["id"],
+        {"visible_rows": len(result)},
+        severity="warning",
+        request=request,
+    )
+    return {"messages": result}
 
 
 @app.post("/lab/replay")
-def lab_replay(payload: ReplayRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with store.lock:
-        message = next((msg for msg in store.data["messages"] if msg["id"] == payload.message_id), None)
-    if not message or user["id"] not in (message["sender_user_id"], message["recipient_user_id"]):
+def lab_replay(
+    payload: ReplayRequest, request: Request, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    with SessionLocal() as session:
+        message = session.scalars(
+            select(Message).where(Message.id == payload.message_id)
+        ).first()
+        packet = message.packet if message else None
+        involved = message and user["id"] in (
+            message.sender_user_id,
+            message.recipient_user_id,
+        )
+    if not message or not involved:
         raise HTTPException(status_code=404, detail="Message not found")
-    record_event("REPLAY_PACKET_PREPARED", user["id"], {"message_id": payload.message_id})
-    return {"packet": message["packet"], "expected_result": "REPLAY_REJECTED"}
+    record_event(
+        "REPLAY_PACKET_PREPARED",
+        user["id"],
+        {"message_id": payload.message_id},
+        severity="warning",
+        request=request,
+    )
+    return {"packet": packet, "expected_result": "REPLAY_REJECTED"}
 
 
 @app.post("/lab/tamper")
-def lab_tamper(payload: ReplayRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with store.lock:
-        message = next((msg for msg in store.data["messages"] if msg["id"] == payload.message_id), None)
-    if not message or user["id"] not in (message["sender_user_id"], message["recipient_user_id"]):
+def lab_tamper(
+    payload: ReplayRequest, request: Request, user: dict[str, Any] = Depends(current_user)
+) -> dict[str, Any]:
+    with SessionLocal() as session:
+        message = session.scalars(
+            select(Message).where(Message.id == payload.message_id)
+        ).first()
+        stored_packet = copy.deepcopy(message.packet) if message else None
+        involved = message and user["id"] in (
+            message.sender_user_id,
+            message.recipient_user_id,
+        )
+    if not message or not involved:
         raise HTTPException(status_code=404, detail="Message not found")
-    packet = copy.deepcopy(message["packet"])
+    packet = stored_packet
     ciphertext = base64url_decode(packet["ciphertext"])
     if ciphertext:
         tampered = bytes([ciphertext[0] ^ 1]) + ciphertext[1:]
     else:
         tampered = b"x"
     packet["ciphertext"] = base64url_encode(tampered)
-    record_event("TAMPER_PACKET_PREPARED", user["id"], {"message_id": payload.message_id})
+    record_event(
+        "TAMPER_PACKET_PREPARED",
+        user["id"],
+        {"message_id": payload.message_id},
+        severity="warning",
+        request=request,
+    )
     return {"packet": packet, "expected_result": "TAMPER_REJECTED"}
 
 
 @app.post("/lab/key-substitution")
 def lab_key_substitution(
     payload: KeySubstitutionRequest,
+    request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     target = normalize_username(payload.username)
-    if target not in store.data["users"]:
+    with SessionLocal() as session:
+        exists = session.get(User, target) is not None
+    if not exists:
         raise HTTPException(status_code=404, detail="User does not exist")
     record_event(
         "KEY_SUBSTITUTION_WARNING",
         user["id"],
         {"target_user_id": target, "note": "Client should compare fingerprints before trusting key"},
+        severity="warning",
+        request=request,
     )
     return {
         "target_user_id": target,
@@ -727,6 +842,7 @@ def lab_key_substitution(
 @app.post("/lab/state-compromise")
 def lab_state_compromise(
     payload: StateCompromiseRequest,
+    request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
     compromise_at = max(payload.compromise_at_message, 1)
@@ -743,18 +859,19 @@ def lab_state_compromise(
         "recovery_point": rekey_at,
         "recovered_after_dh_ratchet": True,
     }
-    record_event("DH_REKEY_RECOVERED", user["id"], result)
+    record_event("DH_REKEY_RECOVERED", user["id"], result, request=request)
     return {"metrics": result}
 
 
 @app.get("/lab/events")
 def lab_events(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    with store.lock:
-        events = [
-            event
-            for event in store.data["security_events"]
-            if event["actor_user_id"] in (None, user["id"])
-        ]
+    with SessionLocal() as session:
+        stmt = (
+            select(SecurityEvent)
+            .where(SecurityEvent.actor_user_id.in_((None, user["id"])))
+            .order_by(SecurityEvent.seq)
+        )
+        events = [event.as_dict() for event in session.scalars(stmt).all()]
     return {"events": events[-50:]}
 
 
@@ -795,7 +912,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             return
         payload = verify_jwt(first.get("access_token", ""))
         user_id = payload["sub"]
-        if user_id not in store.data["users"]:
+        with SessionLocal() as session:
+            user_exists = session.get(User, user_id) is not None
+        if not user_exists:
             await websocket.close(code=4401)
             return
         await manager.connect(user_id, websocket)
@@ -818,7 +937,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 
 def reset_demo_store() -> None:
-    store.reset()
+    reset_db()
 
 
 if WEB_DIR.exists():

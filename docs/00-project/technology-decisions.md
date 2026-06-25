@@ -1,6 +1,6 @@
 # Technology Decisions
 
-This document records the technology choices that match the current runnable implementation. Earlier project planning mentioned a larger React/Fastify/PostgreSQL/Prisma stack; those remain future expansion options, not the current MVP stack.
+This document records the technology choices that match the current runnable implementation. Earlier project planning mentioned a larger React/Fastify/Prisma stack; React and Fastify remain future expansion options. PostgreSQL is now supported for deployment (through SQLAlchemy, not Prisma).
 
 ## 1. Decision Principles
 
@@ -19,10 +19,10 @@ Detailed scope boundaries are defined in [`project-scope.md`](project-scope.md).
 | Layer | Current decision | Why it fits now |
 |---|---|---|
 | Backend | Python + FastAPI | Small API surface, built-in OpenAPI, easy local run command, good pytest support |
-| Frontend | HTML + CSS + vanilla JavaScript | No build step, easy demo, direct access to Web Crypto, IndexedDB, and admin/user UI state |
+| Frontend | HTML + vanilla JavaScript, styled with Tabler/Bootstrap (CDN) | No build step, easy demo, direct access to Web Crypto, IndexedDB, and admin/user UI state |
 | Auth | Argon2id + HMAC-SHA256 JWT + refresh cookie | Demonstrates password hashing, short-lived access tokens, and revocable refresh sessions |
 | Realtime | FastAPI WebSocket plus REST fallback | Shows explicit WebSocket auth while keeping the demo reliable through polling |
-| Server storage | Local JSON store in `data/demo_store.json` | Simple inspectable persistence for course demos and tests |
+| Server storage | SQLAlchemy ORM: SQLite locally / PostgreSQL on deploy (Alembic migrations) | Real relational store with foreign keys, selectable by `DATABASE_URL`, still easy to inspect for the demo |
 | Client crypto | Browser Web Crypto API | Provides reviewed browser primitives for ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 |
 | Client state | IndexedDB | Persists browser private key and safety state across reloads |
 | Tests/tools | Pytest + FastAPI TestClient, Node syntax/decrypt helper | Verifies backend auth/device/ciphertext/admin boundaries and allows manual ciphertext decryption checks |
@@ -55,13 +55,19 @@ Trade-off: plain JavaScript gives less type safety and less component structure 
 
 ### CSS
 
-The current UI uses a single CSS file at `apps/web/src/styles.css`.
+Styling uses the **Tabler** UI kit (which is built on **Bootstrap 5**) loaded from a
+CDN, plus a small custom layer at `apps/web/src/styles.css`. Tabler styles the
+admin dashboard (cards, tables, page header, stat cards); its bundled Bootstrap
+grid/components style the chat and auth screens. The custom layer only adds
+app-specific pieces (chat bubbles, contacts list, key inspector, status/severity
+badges).
 
 Reasons:
 
-- Chat, key-inspector, and admin-dashboard states are easier to keep stable in a small static stylesheet.
-- There is no Tailwind build step.
-- The screenshots remain predictable for report evidence.
+- Tabler/Bootstrap give a professional look without writing a full design system.
+- They are pulled from a CDN with a single `<link>` - **still no build step / bundler**, consistent with the vanilla-JS decision above.
+- The application logic (auth, Web Crypto E2EE, IndexedDB, WebSocket) stays our own vanilla JavaScript; the frameworks only provide presentation.
+- There is no Tailwind/React/Vite toolchain.
 
 Trade-off: repeated visual patterns must be maintained manually.
 
@@ -91,19 +97,28 @@ Reasons:
 - `TestClient` makes backend boundary tests straightforward.
 - The same server can serve the static frontend at `/`.
 
-### Local JSON Store
+### Database (SQLAlchemy)
 
-The current server persists demo data in `data/demo_store.json`.
+The server persists data through SQLAlchemy (`apps/server/db.py`). One env var,
+`DATABASE_URL`, selects the backend:
 
-Stored data includes:
+- **Local / default:** a SQLite file at `data/secure_chat.db` (zero setup).
+- **Deployment:** a managed PostgreSQL instance (e.g. Neon/Supabase/Render). `postgres://` URLs are normalised to the psycopg driver automatically.
 
-- Users and password hashes.
-- Refresh session hashes and expiration.
-- Device public keys and fingerprints.
-- Encrypted message packets.
-- Security Lab events.
+Tables (with foreign keys and `ON DELETE` rules):
 
-This is intentionally inspectable for the server-compromise/admin-dashboard demo. It is not a production database. PostgreSQL plus migrations can replace it later when the team needs stronger relational constraints and multi-user durability.
+- `users` - accounts and Argon2id password hashes.
+- `refresh_sessions` - refresh-token hashes, expiry; expired rows are cleaned up on login/refresh.
+- `devices` - device public keys and fingerprints.
+- `conversations` - normalised one-to-one threads (participants, last message time).
+- `messages` - encrypted packets, with indexed `conversation_id` / `message_number`.
+- `security_events` - audit log with severity, actor IP, and user-agent.
+
+Schema is managed by **Alembic** migrations under `migrations/` (run `alembic
+upgrade head` on deploy). For local SQLite the app also creates tables on first
+run, so a fresh clone works with no extra steps. The store stays inspectable for
+the server-compromise / admin-dashboard demo while now giving real relational
+constraints and multi-user durability.
 
 ### WebSocket
 
@@ -143,7 +158,7 @@ JWT authorizes API and WebSocket access. It does not decrypt messages and does n
 
 ### Refresh Cookie
 
-Refresh tokens are opaque random values stored in an HttpOnly cookie. The server stores only their SHA-256 hash in the JSON demo store. Logout marks matching sessions as revoked and deletes the cookie.
+Refresh tokens are opaque random values stored in an HttpOnly cookie. The server stores only their SHA-256 hash in the `refresh_sessions` table. Logout marks matching sessions as revoked and deletes the cookie; expired sessions are purged on login/refresh.
 
 ## 7. Cryptography Decisions
 
@@ -204,17 +219,17 @@ node scripts\decrypt_message.mjs --list
 node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
 ```
 
-It needs the server JSON store plus a browser device export containing `privateKeyJwk`. This is a debugging/evidence tool only; exported private keys must stay outside git.
+It needs the stored packet plus a browser device export containing `privateKeyJwk`. (The helper currently reads the legacy JSON store and is being updated to read the SQLite database.) This is a debugging/evidence tool only; exported private keys must stay outside git.
 
 ## 9. Future Expansion Path
 
 | Future item | Why it may be useful | Current status |
 |---|---|---|
 | React + TypeScript + Vite | Larger UI, typed state, reusable components | Not used by current MVP |
-| Tailwind CSS | Faster repeated security-state styling | Not used by current MVP |
-| PostgreSQL | Durable relational storage and constraints | Not used by current MVP |
-| Prisma or SQLAlchemy | Reproducible schema/migrations | Reserved for later |
-| Playwright | Browser evidence for chat/key/admin states | Planned |
+| Tailwind CSS | Faster repeated security-state styling | Not used (Tabler/Bootstrap used instead) |
+| SQLAlchemy + Alembic | Relational models and reproducible migrations | **Implemented** in the current MVP |
+| PostgreSQL | Durable relational storage and constraints | **Supported** for deployment via `DATABASE_URL` |
+| Playwright | Browser evidence for chat/key/admin states | Used ad-hoc for UI screenshots (dev-only, not in `requirements.txt`) |
 | k6 or similar | Scenario benchmarks | Planned |
 
 ## 10. Decision Summary
@@ -224,7 +239,7 @@ It needs the server JSON store plus a browser device export containing `privateK
 | FastAPI | Small readable backend with REST, WebSocket, and tests | Python app is separate from browser JS protocol code |
 | Vanilla JS | No build step and direct Web Crypto access | Less type safety than TypeScript |
 | IndexedDB | Local private key persists across reloads | Does not protect against XSS/malware |
-| JSON demo store | Easy to inspect for lab evidence | Not production durable or relational |
+| SQLite/PostgreSQL via SQLAlchemy + Alembic | Real relational store with FKs/migrations, still inspectable for lab evidence | One env var to switch backends; in-memory WebSocket manager still limits horizontal scaling |
 | Argon2id | Strong password hashing for login | Needs tuned parameters and dependency install |
 | HMAC-SHA256 JWT | Simple local authorization | Production should use stronger key management and a JWT library |
 | Web Crypto P-256/HKDF/AES-GCM | Reviewed browser primitives | Not a full Signal algorithm set |
@@ -240,5 +255,8 @@ These references justify tool selection and design direction. The project still 
 - MDN IndexedDB API: https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
 - OWASP Password Storage Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 - OWASP JSON Web Token Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
-- PostgreSQL documentation for future database work: https://www.postgresql.org/docs/
-- Playwright documentation for future browser tests: https://playwright.dev/docs/intro
+- SQLAlchemy ORM documentation: https://docs.sqlalchemy.org/
+- Alembic migrations documentation: https://alembic.sqlalchemy.org/
+- PostgreSQL documentation (deployment backend): https://www.postgresql.org/docs/
+- Tabler UI kit (admin/Bootstrap styling): https://tabler.io/
+- Playwright documentation (UI screenshots/evidence): https://playwright.dev/docs/intro

@@ -30,11 +30,12 @@ The current MVP includes:
 - One-to-one ciphertext relay over REST and WebSocket notification.
 - Browser-side ECDH, HKDF-SHA256, and AES-GCM encryption/decryption.
 - AES-GCM associated data over the canonical packet header.
-- User chat UI focused on contacts, encrypted chat, and key fingerprints.
-- Admin dashboard for server-side demo records: password hashes, refresh-token hashes, public device keys, ciphertext, and security events.
+- SQLAlchemy storage with foreign keys and a normalised `conversations` table; SQLite locally, PostgreSQL on deploy (selected by `DATABASE_URL`), schema managed by Alembic.
+- User chat UI (Bootstrap) focused on contacts, encrypted chat, and key fingerprints.
+- Admin dashboard (Tabler) for server-side records: password hashes, refresh-token hashes, public device keys, conversations, ciphertext, and security events with severity / actor IP.
 - Security Lab backend endpoints for replay, tamper, key substitution, and PCS rekey metrics.
 - Manual Node decrypt helper for checking one stored ciphertext against an exported browser private key.
-- Pytest tests for the FastAPI backend and ciphertext-only storage rules.
+- Pytest tests for the FastAPI backend (API boundaries) and database integrity.
 
 ## Run Locally
 
@@ -130,10 +131,11 @@ The device JSON must come from the browser IndexedDB device record and must cont
           v                                              |
 +-------------------+                                    |
 | Bob Web Client    |                         +----------v-----------+
-| - IndexedDB key   |                         | Local JSON demo store|
-| - Decrypt locally |                         | - users/sessions     |
-| - Security states |                         | - public keys only   |
-+-------------------+                         | - encrypted packets  |
+| - IndexedDB key   |                         | SQL database         |
+| - Decrypt locally |                         | (SQLite / PostgreSQL)|
+| - Security states |                         | - users/sessions     |
++-------------------+                         | - public keys only   |
+                                              | - encrypted packets  |
                                               +----------------------+
 ```
 
@@ -144,15 +146,15 @@ JWT is used for server access. It does not encrypt or decrypt messages. Private 
 | Layer | Current technology | Role |
 |---|---|---|
 | Backend | Python + FastAPI | Auth, refresh sessions, device/key APIs, ciphertext relay, admin and lab endpoints |
-| Frontend | HTML + CSS + vanilla JavaScript | Login, user chat UI, admin dashboard, browser crypto |
+| Frontend | Vanilla JavaScript, styled with Tabler/Bootstrap (CDN) | Login, user chat UI, admin dashboard, browser crypto |
 | Auth | Argon2id, HMAC-SHA256 JWT, HttpOnly refresh cookie | Password login and API/WebSocket authorization |
 | Realtime | FastAPI WebSocket plus REST polling fallback | Notify recipient clients about new encrypted packets |
-| Storage | Local JSON store under `data/` | Demo persistence for users, refresh sessions, devices, messages, and lab events |
+| Storage | SQLAlchemy: SQLite (local) / PostgreSQL (deploy), Alembic migrations | Persistence for users, refresh sessions, devices, conversations, messages, and lab events |
 | Client crypto | Browser Web Crypto API | ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 fingerprints |
 | Client private state | IndexedDB | Browser device private key and safety/fingerprint state |
-| Tests | Pytest + FastAPI TestClient | Backend smoke and security-boundary tests |
+| Tests | Pytest + FastAPI TestClient | Backend API/security-boundary and database integrity tests |
 
-PostgreSQL, Prisma, React, TypeScript, Tailwind, Playwright, and fuller benchmark tooling remain reasonable future expansion paths, but they are not the stack used by the current runnable MVP.
+React, TypeScript, a Tailwind/SPA frontend, and fuller benchmark tooling remain reasonable future expansion paths, but they are not the stack used by the current runnable MVP. Storage now uses a real SQL database (SQLite locally, PostgreSQL on deploy) via SQLAlchemy + Alembic.
 
 ## API Surface
 
@@ -208,23 +210,27 @@ secure-web-chat/
 |-- README.md
 |-- requirements.txt
 |-- .env.example
+|-- alembic.ini
 |-- apps/
 |   |-- server/
 |   |   |-- main.py
+|   |   |-- db.py
 |   |   `-- tests/
 |   `-- web/
 |       |-- index.html
 |       `-- src/
+|-- migrations/
 |-- docs/
 `-- scripts/
 ```
 
 | Directory | Purpose |
 |---|---|
-| `apps/server/` | Current FastAPI backend and backend tests |
-| `apps/web/` | Current browser UI, Web Crypto E2EE logic, and styling |
+| `apps/server/` | FastAPI backend (`main.py`), SQLAlchemy models (`db.py`), and tests |
+| `apps/web/` | Browser UI, Web Crypto E2EE logic, and styling (Tabler/Bootstrap + custom layer) |
+| `migrations/` | Alembic database migrations (`alembic.ini` at the root) |
 | `docs/` | Project docs, design decisions, protocol notes, evaluation plan |
-| `scripts/` | Setup, test, run, reset, and manual decrypt helpers |
+| `scripts/` | Setup, test, run, reset, JSON→DB migration, and manual decrypt helpers |
 
 ## Documentation
 
@@ -255,7 +261,7 @@ Run:
 python -m pytest apps/server/tests
 ```
 
-The current backend tests cover register/login, device public key storage, ciphertext-only message storage, lab dump behavior, rejection of message packets that contain plaintext, admin-dashboard authorization, and contact-list filtering.
+The current backend tests (9 in `apps/server/tests/`) cover register/login, device public key storage, ciphertext-only message storage, lab dump behavior, rejection of message packets that contain plaintext, admin-dashboard authorization, contact-list filtering, plus database integrity (foreign keys, cascade delete, conversation normalisation, expired-session cleanup, and event severity/IP capture).
 
 ## Security Constraints
 
@@ -268,11 +274,12 @@ The current backend tests cover register/login, device public key storage, ciphe
 
 ## Limitations
 
-- The current store is a JSON demo store, not PostgreSQL.
 - The current protocol is a simplified course implementation, not full Signal.
 - The DH rekey/PCS behavior is currently represented in the Security Lab metrics rather than a complete production double-ratchet message flow.
-- IndexedDB keeps the demo usable across reloads, but it does not protect against XSS, malware, or malicious browser extensions.
+- The in-memory WebSocket manager means the server should run as a single worker (no horizontal scaling yet).
+- No rate limiting, CSP/security headers, or deployment/CI is set up yet; HTTPS toggles (`COOKIE_SECURE`, `CORS_ORIGINS`) exist but are not wired to a live deploy.
+- IndexedDB keeps the demo usable across reloads, but it does not protect against XSS, malware, or malicious browser extensions; there is no key backup/recovery yet.
 - Browser private keys are extractable in the current demo so the Web Crypto flow is easier to inspect and rerun.
-- Playwright UI tests and full benchmark result files have not been added yet.
+- A committed Playwright test suite and full benchmark result files have not been added yet.
 
 Repository hygiene details: [docs/00-project/repository-hygiene.md](docs/00-project/repository-hygiene.md)

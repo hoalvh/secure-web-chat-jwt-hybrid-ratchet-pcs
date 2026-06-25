@@ -11,12 +11,15 @@ Use this checklist before pushing the repository so another machine can clone an
 | `.env.example` | Example environment variables |
 | `.gitignore` | Prevents local data, logs, secrets, and virtualenv files from being committed |
 | `apps/server/main.py` | FastAPI backend |
+| `apps/server/db.py` | SQLAlchemy models and database engine (SQLite / PostgreSQL) |
+| `alembic.ini` and `migrations/` | Alembic configuration and schema migrations |
 | `apps/web/index.html` and `apps/web/src/` | Browser UI and Web Crypto logic |
-| `apps/server/tests/test_app.py` | Smoke tests for backend security boundaries |
+| `apps/server/tests/test_app.py`, `apps/server/tests/test_db.py` | Backend API and database (FK/cascade/conversation) tests |
 | `scripts/setup_windows.ps1` | Creates venv and installs dependencies |
 | `scripts/run_dev.ps1` | Starts the local server |
 | `scripts/test.ps1` | Runs backend tests |
-| `scripts/reset_demo_data.ps1` | Removes local demo JSON data |
+| `scripts/reset_demo_data.ps1` | Removes local demo data (SQLite DB and legacy JSON) |
+| `scripts/migrate_json_to_db.py` | One-time import of a legacy JSON store into the database |
 | `scripts/decrypt_message.mjs` | Manually decrypts one stored message with an exported browser device key for evidence/debugging |
 
 ## Do Not Push
@@ -25,6 +28,9 @@ Check that these files are not staged:
 
 ```text
 .venv/
+data/secure_chat.db
+data/secure_chat.db-wal
+data/secure_chat.db-shm
 data/demo_store.json
 server*.log
 *.err.log
@@ -78,7 +84,7 @@ http://127.0.0.1:8000
 
 Expected result:
 
-- `.\scripts\test.ps1` reports the backend test suite passing. The current suite has 4 tests.
+- `.\scripts\test.ps1` reports the backend test suite passing. The current suite has 9 tests (API boundaries + database integrity).
 - `/health` returns `ok: true`.
 - Browser can register `alice` and `bob`.
 - Alice can send an encrypted message to Bob.
@@ -104,4 +110,4 @@ If demo data is messy:
 .\scripts\run_dev.ps1
 ```
 
-The server recreates `data/demo_store.json` automatically.
+The server recreates the local SQLite database (`data/secure_chat.db`) automatically on next start.
