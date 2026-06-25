@@ -57,7 +57,7 @@ This is enough for the course demo but does not implement full X3DH, signed prek
 
 To decrypt one stored ciphertext outside the browser, the same inputs and algorithm are required:
 
-- Server JSON store containing the selected packet and peer public device key.
+- Server store (SQLite/PostgreSQL database) containing the selected packet and peer public device key.
 - Local browser device private key JWK for either the sender or recipient.
 - Packet header exactly as stored.
 - Packet `nonce`, `ciphertext`, and `tag`.

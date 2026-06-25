@@ -2,7 +2,7 @@
 
 This folder is organized as a small documentation set rather than a flat list of notes.
 
-The current runnable MVP uses Python FastAPI, HTML/CSS/vanilla JavaScript, Browser Web Crypto, IndexedDB, and a local JSON demo store. The user UI is chat plus key/fingerprint inspection; admin UI is a server dashboard for hashes, public keys, ciphertext, and events. Larger React/TypeScript/PostgreSQL plans are documented only as future expansion where mentioned.
+The current runnable MVP uses Python FastAPI, vanilla JavaScript styled with Tabler/Bootstrap (CDN), Browser Web Crypto, IndexedDB, and a SQLAlchemy database (SQLite locally, PostgreSQL for deployment, schema managed by Alembic). The user UI is chat plus key/fingerprint inspection; admin UI is a server dashboard for hashes, public keys, ciphertext, conversations, and events. A larger React/TypeScript frontend remains future expansion where mentioned.
 
 ## 00. Project
 
@@ -36,10 +36,10 @@ Experiment and benchmark planning.
 | Document | Purpose |
 |---|---|
 | [Experiment Plan](02-evaluation/experiment-plan.md) | Server compromise, stolen JWT, replay, tamper, key substitution, FS, and PCS experiments |
-| [Code Flow and Runtime Explanation](02-evaluation/code-flow-runtime-explanation.md) | Runtime walkthrough: browser storage, token structure, server JSON store, chat flow, admin flow |
+| [Code Flow and Runtime Explanation](02-evaluation/code-flow-runtime-explanation.md) | Runtime walkthrough: browser storage, token structure, server database, chat flow, admin flow |
 | [Risks, Goals, Solution, Architecture, Demo](02-evaluation/risks-goals-solution-architecture-demo.md) | Clear explanation of risks-to-goals mapping, architecture, demo architecture, expected results, and commands |
 | [Results Template](02-evaluation/results-template.md) | Tables and interpretation rules for security and performance results |
-| [Project Gaps and Limitations](02-evaluation/project-gaps-and-limitations.md) | Current missing pieces: DB, UI maturity, full Signal/ratchet, recovery, hardening, deployment |
+| [Project Gaps and Limitations](02-evaluation/project-gaps-and-limitations.md) | Current missing pieces: full Signal/Double Ratchet, key recovery, security hardening, deployment/CI |
 
 ## Naming Convention
 

@@ -45,7 +45,7 @@ Maintainers: @hoalvh, @hnhat1234, @siberlly
 | FastAPI backend foundation | Lead | Review | Integrate |
 | Register/login/JWT/refresh | Lead | Review | Integrate |
 | WebSocket authentication | Lead | Review | Integrate |
-| JSON demo store boundaries | Lead | Review | Review |
+| Database store boundaries (SQLAlchemy/Alembic) | Lead | Review | Review |
 | Device public key API | Lead | Review | Integrate |
 | E2EE packet format | Review | Lead | Integrate |
 | Key schedule and ratchet concept | Review | Lead | Integrate |
@@ -181,7 +181,7 @@ docs/02-evaluation/
 
 Main deliverables:
 
-- HTML/CSS/vanilla JS frontend.
+- Vanilla JS frontend styled with Tabler/Bootstrap (CDN).
 - Register/login UI.
 - Contact list and manual contact opening.
 - IndexedDB client state integration.

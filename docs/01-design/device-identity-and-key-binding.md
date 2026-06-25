@@ -29,7 +29,7 @@ If the server can replace Bob's public key without Alice noticing, end-to-end en
 |---|---|---|
 | Device key agreement | ECDH P-256 via Web Crypto | Built into browsers and sufficient for the current E2EE demo |
 | Public key format | JWK public key | Native Web Crypto import/export format |
-| Public key directory | FastAPI + JSON demo store | Simple key lookup for local demo and lab evidence |
+| Public key directory | FastAPI + SQLAlchemy database (`devices` table) | Simple key lookup for local demo and lab evidence |
 | Local private-key storage | IndexedDB native API | Browser-compatible persistence without a build dependency |
 | Safety display | SHA-256 fingerprint of public JWK | Human-checkable indicator for key substitution warnings |
 

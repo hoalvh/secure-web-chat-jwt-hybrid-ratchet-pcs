@@ -28,8 +28,8 @@ The web application, local storage, UI, and server setup are included to support
 | Threat model | Deep | Server compromise, JWT theft, replay/tamper, key substitution, XSS limits |
 | Security Lab / admin evidence | Deep | FastAPI lab endpoints plus admin dashboard evidence; normal user UI stays focused on chat and keys |
 | Authentication and JWT | Secure MVP | Argon2id, HMAC-SHA256 JWT, refresh cookie |
-| Storage | Demo correctness | Local JSON store under `data/`, not production database |
-| Frontend UI | Demo-ready security UX | HTML/CSS/vanilla JS with user chat/key inspector and admin dashboard |
+| Storage | Real relational store | SQLAlchemy: SQLite locally, PostgreSQL on deploy (`DATABASE_URL`), Alembic migrations, foreign keys |
+| Frontend UI | Demo-ready security UX | Vanilla JS styled with Tabler/Bootstrap (CDN): user chat/key inspector and admin dashboard |
 | Deployment | Local reproducible setup | Run one FastAPI app locally |
 | Scalability | Design awareness only | Out of current scope |
 
@@ -79,27 +79,33 @@ These topics can be mentioned as future work, but they should not take time away
 
 ## 5. Storage Scope
 
-The current MVP uses a local JSON demo store. It supports:
+The MVP uses a SQLAlchemy database (`apps/server/db.py`). `DATABASE_URL` selects
+SQLite locally (`data/secure_chat.db`) or PostgreSQL on deployment. It stores:
 
 - User records with password hashes.
-- Refresh-session hashes.
+- Refresh-session hashes and expiry (expired rows cleaned up on login/refresh).
 - Device public key bundles.
-- Ciphertext message packets.
-- Security event logs.
+- Normalised conversations.
+- Ciphertext message packets (indexed by conversation and message number).
+- Security event logs with severity, actor IP, and user-agent.
 
-This store is useful for the Security Lab because it is easy to inspect and prove that plaintext/private keys are absent.
+The store is still easy to inspect for the Security Lab and proves that
+plaintext/private keys are absent. The admin dashboard reads the same database
+and intentionally exposes only server-side records: password hashes,
+refresh-session hashes, public keys, conversations, ciphertext, routing
+metadata, and security events.
 
-The admin dashboard reads from the same store and intentionally exposes only server-side demo records: password hashes, refresh-session hashes, public keys, ciphertext, routing metadata, and security events.
+Now implemented:
 
-The current MVP does not implement:
+- SQLite (local) and PostgreSQL (deploy) persistence in the running app.
+- SQLAlchemy models with foreign keys, cascade rules, and indexes.
+- Alembic migrations under `migrations/`.
 
-- PostgreSQL-backed persistence in the running app.
-- Prisma/SQLAlchemy migrations.
-- Foreign keys and relational constraints.
-- Advanced indexes.
-- Large-scale archival or retention behavior.
+Still out of scope:
 
-PostgreSQL and migrations are a future expansion path, not a current runtime requirement.
+- Large-scale archival, retention policy, or partitioning.
+- Read replicas / sharding.
+- Production-grade admin console with search/filter/pagination/export.
 
 ## 6. Algorithm Scope
 
@@ -141,8 +147,8 @@ The project does not need to optimize for:
 
 If the project is asked about database algorithms, scalability, or missing chat features, use the scope in this document:
 
-- Current storage is a demo JSON store for local evidence.
-- Production database design is future work.
+- Storage is a SQLAlchemy database: SQLite for local evidence, PostgreSQL for deployment, with Alembic migrations.
+- Advanced database design (retention, replicas, sharding) is future work.
 - The system is not production-ready.
 - Extra chat features such as avatars, files, search, read receipts, and push notifications are lower priority than E2EE, ratcheting concepts, replay/tamper handling, and PCS experiments.
 
@@ -155,7 +161,6 @@ Future extensions can include:
 - Key transparency.
 - Encrypted backup and recovery keys.
 - MFA and account recovery.
-- PostgreSQL persistence with migrations.
 - React/TypeScript UI refactor.
 - Browser automation tests.
 - Admin dashboard filtering/export.

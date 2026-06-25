@@ -1,37 +1,42 @@
 # Code Flow and Runtime Explanation
 
-File này giải thích ngắn gọn nhưng chi tiết cách code hiện tại hoạt động: dữ liệu nằm ở đâu, token có cấu trúc gì, browser lưu gì, server lưu gì, chat mã hóa đi qua những bước nào, và phần nào đã làm xong.
+This document explains, concisely but in detail, how the current code works: where
+data lives, the token structure, what the browser stores, what the server stores,
+the steps an encrypted chat goes through, and what has been completed.
 
-## 1. File chính cần đọc
+## 1. Key Files to Read
 
-| File | Vai trò |
+| File | Role |
 |---|---|
-| `apps/server/main.py` | Toàn bộ backend FastAPI: auth, JWT, refresh token, user/device/message/admin API, WebSocket, JSON store |
-| `apps/web/index.html` | Khung UI: login panel, user chat panel, admin dashboard panel |
-| `apps/web/src/app.js` | Toàn bộ frontend logic: session restore, IndexedDB, Web Crypto, chat, WebSocket, admin dashboard render |
-| `apps/web/src/styles.css` | Giao diện user chat và admin dashboard |
-| `apps/server/tests/test_app.py` | Test backend cho auth, ciphertext-only storage, admin dashboard permission |
-| `scripts/decrypt_message.mjs` | Script Node Web Crypto để decrypt tay một ciphertext đã lưu nếu có đúng private key browser |
-| `data/demo_store.json` | File dữ liệu local do server tự tạo khi chạy demo |
+| `apps/server/main.py` | Whole FastAPI backend: auth, JWT, refresh token, user/device/message/admin API, WebSocket |
+| `apps/server/db.py` | SQLAlchemy layer: models + engine (SQLite/PostgreSQL), backend chosen via `DATABASE_URL` |
+| `migrations/` + `alembic.ini` | Alembic migrations managing the schema |
+| `apps/web/index.html` | UI shell (Tabler/Bootstrap): login panel, user chat panel, admin dashboard panel |
+| `apps/web/src/app.js` | All frontend logic: session restore, IndexedDB, Web Crypto, chat, WebSocket, admin dashboard render |
+| `apps/web/src/styles.css` | Thin custom layer over Tabler/Bootstrap (chat bubbles, contacts, key inspector, badges) |
+| `apps/server/tests/test_app.py`, `test_db.py` | Backend tests: auth/ciphertext/admin + DB integrity (FK/cascade/conversation/cleanup/severity) |
+| `scripts/decrypt_message.mjs` | Node Web Crypto script to manually decrypt one stored ciphertext given the right browser private key |
+| `data/secure_chat.db` | Local SQLite database created by the server (deploy uses PostgreSQL via `DATABASE_URL`) |
 
-Luồng tổng quát:
+Overall flow:
 
 ```text
 Browser UI
 -> apps/web/src/app.js
 -> REST API / WebSocket
 -> apps/server/main.py
--> data/demo_store.json
--> response về browser
+-> apps/server/db.py (SQLAlchemy)
+-> data/secure_chat.db (SQLite) or PostgreSQL
+-> response back to the browser
 ```
 
-## 2. Dữ liệu lưu ở browser
+## 2. Data Stored in the Browser
 
-Browser hiện có 4 loại state khác nhau.
+The browser keeps four kinds of state.
 
 ### 2.1. JavaScript memory state
 
-Trong `apps/web/src/app.js`, object `state` chỉ tồn tại khi tab đang mở:
+In `apps/web/src/app.js`, the `state` object exists only while the tab is open:
 
 ```js
 {
@@ -45,25 +50,29 @@ Trong `apps/web/src/app.js`, object `state` chỉ tồn tại khi tab đang mở
   lastMessages,
   adminData,
   ws,
-  refreshTimer
+  refreshTimer,
+  renderedKey,
+  decryptCache
 }
 ```
 
-Ý nghĩa:
+Meaning:
 
-| Field | Lưu gì | Ghi chú |
+| Field | Stores | Note |
 |---|---|---|
-| `token` | Access JWT hiện tại | Dùng cho header `Authorization: Bearer ...` |
-| `user` | User public info | Có `id`, `username`, `is_admin`, `created_at` |
-| `device` | Device key record của user trong browser | Có cả private key JWK |
-| `contact` | Username đang chat | Ví dụ `bob` |
-| `contactBundle` | Public key bundle của contact | Lấy từ `/keys/bundle/{username}` |
-| `keyBundles` | Cache public key bundle | Map trong RAM, mất khi reload |
-| `packetIds` | Packet IDs đã thấy | Dùng cho replay/demo logic |
-| `lastMessages` | Messages đang hiển thị | Lấy từ `/messages/offline` |
-| `adminData` | Dữ liệu dashboard admin | Chỉ khi login admin |
-| `ws` | WebSocket connection | Nhận notify message mới |
-| `refreshTimer` | Timer polling 2.5 giây | Fallback tự refresh chat |
+| `token` | Current access JWT | Used for the `Authorization: Bearer ...` header |
+| `user` | User public info | Has `id`, `username`, `is_admin`, `created_at` |
+| `device` | The user's device-key record in this browser | Includes the private key JWK |
+| `contact` | The username being chatted with | e.g. `bob` |
+| `contactBundle` | The contact's public key bundle | From `/keys/bundle/{username}` |
+| `keyBundles` | Public key bundle cache | In-RAM map, lost on reload |
+| `packetIds` | Packet IDs already seen | Used by replay/demo logic |
+| `lastMessages` | Currently displayed messages | From `/messages/offline` |
+| `adminData` | Admin dashboard data | Only when logged in as admin |
+| `ws` | WebSocket connection | Receives new-message notifications |
+| `refreshTimer` | 2.5s polling timer | Fallback auto-refresh of the chat |
+| `renderedKey` | Signature of the last rendered message list | Skips re-render when nothing changed (anti-flicker) |
+| `decryptCache` | Cache of decrypted bodies by packet key | Avoids re-running crypto on re-render |
 
 ### 2.2. `sessionStorage`
 
@@ -87,21 +96,21 @@ Value:
 }
 ```
 
-Vai trò:
+Role:
 
-- Giữ login khi bấm F5/reload tab.
-- Không dùng `localStorage`, nên token không được giữ lâu sau khi đóng browser session.
-- Khi logout, code gọi `clearSession()` để xóa key này.
+- Keeps the login across F5/tab reload.
+- Does not use `localStorage`, so the token is not kept long after the browser session ends.
+- On logout, the code calls `clearSession()` to delete this key.
 
-Luồng restore:
+Restore flow:
 
 ```text
 Page load
 -> restoreSession()
--> đọc sessionStorage
--> gọi GET /me bằng token cũ
--> nếu token còn hợp lệ: vào app
--> nếu token hết hạn/sai: xóa session và quay lại login
+-> read sessionStorage
+-> call GET /me with the old token
+-> if the token is still valid: enter the app
+-> if expired/invalid: clear the session and return to login
 ```
 
 ### 2.3. IndexedDB
@@ -112,14 +121,14 @@ Database:
 secure-web-chat-demo
 ```
 
-Object store:
+Object stores:
 
-| Store | Key | Lưu gì |
+| Store | Key | Stores |
 |---|---|---|
-| `devices` | `username` | Device key của từng user trên browser này |
-| `safety` | `id` | Fingerprint đã tin cho từng cặp user/contact |
+| `devices` | `username` | The device key for each user on this browser |
+| `safety` | `id` | The trusted fingerprint for each user/contact pair |
 
-Record trong `devices`:
+Record in `devices`:
 
 ```json
 {
@@ -145,13 +154,13 @@ Record trong `devices`:
 }
 ```
 
-Điểm quan trọng:
+Important:
 
-- `privateKeyJwk` chỉ nằm trong browser IndexedDB.
-- Server không được nhận field private `d`.
-- Nếu `/devices` nhận public key JWK có field `d`, backend trả HTTP 400.
+- `privateKeyJwk` stays only in the browser's IndexedDB.
+- The server must not receive the private field `d`.
+- If `/devices` receives a public key JWK containing `d`, the backend returns HTTP 400.
 
-Record trong `safety`:
+Record in `safety`:
 
 ```json
 {
@@ -161,14 +170,14 @@ Record trong `safety`:
 }
 ```
 
-Vai trò của `safety`:
+Role of `safety`:
 
-- Lần đầu mở contact, browser lưu fingerprint.
-- Lần sau nếu fingerprint đổi, UI báo `Key changed`.
+- On first opening a contact, the browser stores the fingerprint.
+- Next time, if the fingerprint changes, the UI shows `Key changed`.
 
 ### 2.4. HttpOnly refresh cookie
 
-Server set cookie:
+The server sets the cookie:
 
 ```text
 secure_chat_refresh=<random_refresh_token>
@@ -177,19 +186,19 @@ SameSite=Lax
 Max-Age=604800
 ```
 
-Điểm quan trọng:
+Important:
 
-- JavaScript không đọc được cookie này vì `HttpOnly`.
-- Browser tự gửi cookie khi `fetch(..., credentials: "include")`.
-- Server không lưu raw refresh token, chỉ lưu hash trong `refresh_sessions`.
+- JavaScript cannot read this cookie because of `HttpOnly`.
+- The browser sends the cookie automatically on `fetch(..., credentials: "include")`.
+- The server does not store the raw refresh token, only its hash in `refresh_sessions`.
 
-## 3. Cấu trúc token
+## 3. Token Structure
 
-Project có 2 loại token: access JWT và refresh token.
+The project has two token types: the access JWT and the refresh token.
 
 ### 3.1. Access JWT
 
-Access JWT được tạo trong `issue_tokens()`.
+The access JWT is created in `issue_tokens()`.
 
 Header:
 
@@ -224,36 +233,36 @@ HMAC-SHA256(
 )
 ```
 
-Token đầy đủ:
+Full token:
 
 ```text
 base64url(header).base64url(payload).base64url(signature)
 ```
 
-Ý nghĩa payload:
+Payload meaning:
 
-| Field | Ý nghĩa |
+| Field | Meaning |
 |---|---|
-| `sub` | User id chính |
+| `sub` | Primary user id |
 | `username` | Username |
-| `session_id` | Id phiên refresh session phía server |
-| `jti` | Id riêng của access token |
+| `session_id` | Id of the server-side refresh session |
+| `jti` | Unique id of the access token |
 | `iat` | Issued at |
-| `exp` | Expiry, mặc định 900 giây |
-| `iss` | Issuer phải là `secure-chat-server` |
-| `aud` | Audience phải là `secure-chat-web` |
+| `exp` | Expiry, default 900 seconds |
+| `iss` | Issuer, must be `secure-chat-server` |
+| `aud` | Audience, must be `secure-chat-web` |
 
-JWT chỉ dùng để chứng minh user được gọi API. JWT không chứa private key, không chứa AES key, không decrypt được tin nhắn.
+The JWT only proves the user may call the API. It contains no private key, no AES key, and cannot decrypt messages.
 
 ### 3.2. Refresh token
 
-Refresh token là chuỗi random:
+The refresh token is a random string:
 
 ```text
 secrets.token_urlsafe(36)
 ```
 
-Browser nhận qua HttpOnly cookie. Server lưu:
+The browser receives it via the HttpOnly cookie. The server stores:
 
 ```json
 {
@@ -266,121 +275,128 @@ Browser nhận qua HttpOnly cookie. Server lưu:
 }
 ```
 
-Khi gọi `/auth/refresh`:
+On `/auth/refresh`:
 
 ```text
-Browser gửi cookie
--> server hash refresh token nhận được
--> so với refresh_token_hash trong store
--> nếu match và chưa hết hạn: cấp access JWT mới
+Browser sends the cookie
+-> server hashes the received refresh token
+-> compares with refresh_token_hash in the store
+-> if it matches and is not expired: issue a new access JWT
 ```
 
-## 4. Dữ liệu lưu ở server
+## 4. Data Stored on the Server
 
-Server dùng `JsonStore` trong `apps/server/main.py`.
-
-File mặc định:
-
-```text
-data/demo_store.json
-```
-
-Có thể đổi bằng env:
+The server persists data through SQLAlchemy (`apps/server/db.py`). The backend is
+chosen by the `DATABASE_URL` env var:
 
 ```powershell
-$env:SECURE_CHAT_DATA_DIR="E:\some\temp\data"
+# Local (default): SQLite at data/secure_chat.db
+$env:SECURE_CHAT_DATA_DIR="E:\some\temp\data"   # change the SQLite file directory
+# Deploy: PostgreSQL
+$env:DATABASE_URL="postgresql://user:pass@host:5432/db"
 ```
 
-Cấu trúc tổng:
+Tables (with foreign keys + `ON DELETE`):
 
-```json
-{
-  "users": {},
-  "refresh_sessions": {},
-  "devices": {},
-  "messages": [],
-  "security_events": []
-}
+```text
+users             - account + password hash (Argon2id)
+refresh_sessions  - refresh-token hash + expiry (expired rows auto-cleaned)
+devices           - device public key + fingerprint
+conversations     - normalised one-to-one thread (two participants, last_message_at)
+messages          - ciphertext packet, with conversation_id / message_number columns
+security_events   - log with severity, actor_ip, actor_user_agent
 ```
+
+The schema is managed by Alembic (`migrations/`); local SQLite also auto-creates
+tables on first run. The example records below illustrate the shape of the data
+the API returns.
 
 ### 4.1. `users`
 
-Ví dụ:
+Example:
 
 ```json
 {
-  "alice": {
-    "id": "alice",
-    "username": "alice",
-    "password_hash": "$argon2id$...",
-    "is_admin": false,
-    "created_at": "...",
-    "updated_at": "..."
-  }
+  "id": "alice",
+  "username": "alice",
+  "password_hash": "$argon2id$...",
+  "is_admin": false,
+  "created_at": "...",
+  "updated_at": "..."
 }
 ```
 
 Admin rule:
 
 ```text
-ADMIN_USERNAMES mặc định = "admin"
+ADMIN_USERNAMES default = "admin"
 ```
 
-Nếu username là `admin`, user được xem là admin.
+If the username is `admin`, the user is treated as admin.
 
 ### 4.2. `refresh_sessions`
 
-Lưu hash của refresh token, không lưu raw token:
+Stores the hash of the refresh token, never the raw token:
 
 ```json
 {
-  "<session_id>": {
-    "id": "<session_id>",
-    "user_id": "alice",
-    "refresh_token_hash": "<sha256_hex>",
-    "created_at": "...",
-    "expires_at": 1710604800,
-    "revoked_at": null
-  }
+  "id": "<session_id>",
+  "user_id": "alice",
+  "refresh_token_hash": "<sha256_hex>",
+  "created_at": "...",
+  "expires_at": 1710604800,
+  "revoked_at": null
 }
 ```
 
 ### 4.3. `devices`
 
-Server chỉ lưu public key:
+The server stores only the public key:
 
 ```json
 {
-  "alice-browser": {
-    "id": "alice-browser",
-    "user_id": "alice",
-    "device_label": "Browser demo device",
-    "identity_public_key": {
-      "kty": "EC",
-      "crv": "P-256",
-      "x": "...",
-      "y": "...",
-      "ext": true
-    },
-    "fingerprint": "<sha256_hex>",
-    "created_at": "...",
-    "last_seen_at": "...",
-    "revoked_at": null
-  }
+  "id": "alice-browser",
+  "user_id": "alice",
+  "device_label": "Browser demo device",
+  "identity_public_key": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "...",
+    "y": "...",
+    "ext": true
+  },
+  "fingerprint": "<sha256_hex>",
+  "created_at": "...",
+  "last_seen_at": "...",
+  "revoked_at": null
 }
 ```
 
-Không có field `privateKeyJwk`, không có `d`.
+No `privateKeyJwk` field, no `d`.
 
-### 4.4. `messages`
+### 4.4. `conversations` and `messages`
 
-Server lưu encrypted packet:
+A `conversations` row is created/updated when a message is stored:
+
+```json
+{
+  "id": "alice__bob",
+  "participant_a": "alice",
+  "participant_b": "bob",
+  "created_at": "...",
+  "last_message_at": "..."
+}
+```
+
+The server stores the encrypted packet:
 
 ```json
 {
   "id": "msg_...",
+  "conversation_id": "alice__bob",
   "sender_user_id": "alice",
   "recipient_user_id": "bob",
+  "message_number": 1,
   "packet": {
     "version": 1,
     "algorithm": "ECDH-P-256+HKDF-SHA256+AES-GCM",
@@ -403,17 +419,20 @@ Server lưu encrypted packet:
 }
 ```
 
-Server không lưu plaintext. Nếu packet gửi lên có chữ `plaintext`, backend reject HTTP 400.
+The server never stores plaintext. If a submitted packet contains the text `plaintext`, the backend rejects it with HTTP 400.
 
 ### 4.5. `security_events`
 
-Lưu event phục vụ demo/admin:
+Stores events for the demo/admin:
 
 ```json
 {
   "id": "evt_...",
   "type": "USER_LOGIN",
+  "severity": "info",
   "actor_user_id": "alice",
+  "actor_ip": "127.0.0.1",
+  "actor_user_agent": "Mozilla/5.0 ...",
   "detail": {
     "username": "alice"
   },
@@ -421,10 +440,11 @@ Lưu event phục vụ demo/admin:
 }
 ```
 
-Một số event:
+Some events:
 
 - `USER_REGISTERED`
 - `USER_LOGIN`
+- `LOGIN_FAILED`
 - `CIPHERTEXT_STORED`
 - `ADMIN_DASHBOARD_VIEWED`
 - `SERVER_COMPROMISE_VIEWED`
@@ -433,47 +453,48 @@ Một số event:
 - `KEY_SUBSTITUTION_WARNING`
 - `DH_REKEY_RECOVERED`
 
-## 5. Luồng register/login
+## 5. Register/Login Flow
 
 ### 5.1. Register
 
 ```text
-User nhập username/password
+User enters username/password
 -> submitAuth("register")
 -> POST /auth/register
 -> normalize username
 -> hash password
--> tạo user trong store
+-> create user in the database
 -> record USER_REGISTERED
 -> issue_tokens()
--> trả access_token + user
+-> return access_token + user
 -> set refresh cookie
 -> browser saveSession()
 -> enterApp()
 ```
 
-Nếu username là `admin`:
+If the username is `admin`:
 
 ```text
 user.is_admin = true
-enterApp() mở adminPanel
+enterApp() opens adminPanel
 ```
 
-Nếu user thường:
+If a normal user:
 
 ```text
 user.is_admin = false
-enterApp() mở appPanel chat
+enterApp() opens the appPanel chat
 ```
 
 ### 5.2. Login
 
 ```text
-User nhập username/password
+User enters username/password
 -> POST /auth/login
--> server lấy user trong store
+-> server loads the user from the database
 -> verify password hash
--> record USER_LOGIN
+-> clean up expired refresh sessions
+-> record USER_LOGIN (or LOGIN_FAILED)
 -> issue_tokens()
 -> browser saveSession()
 -> enterApp()
@@ -484,22 +505,22 @@ User nhập username/password
 ```text
 logout()
 -> POST /auth/logout
--> server mark refresh session revoked_at
--> delete refresh cookie
--> frontend close WebSocket
--> stop polling timer
--> clear token/user/device/contact/adminData
+-> server marks the refresh session revoked_at
+-> delete the refresh cookie
+-> frontend closes the WebSocket
+-> stop the polling timer
+-> clear token/user/device/contact/adminData and caches
 -> clear sessionStorage
--> show login panel
+-> show the login panel
 ```
 
-## 6. Luồng user chat
+## 6. User Chat Flow
 
-### 6.1. Vào app user
+### 6.1. Entering the user app
 
 ```text
 enterApp()
--> nếu không phải admin:
+-> if not admin:
    -> show appPanel
    -> ensureDevice()
    -> loadUsers()
@@ -507,31 +528,31 @@ enterApp()
    -> startAutoRefresh()
 ```
 
-### 6.2. Tạo hoặc reuse device key
+### 6.2. Create or reuse the device key
 
 `ensureDevice()`:
 
 ```text
 IndexedDB get devices[user.id]
--> nếu chưa có:
+-> if absent:
    -> crypto.subtle.generateKey(ECDH P-256)
    -> export publicKeyJwk
    -> export privateKeyJwk
    -> fingerprint = SHA-256(canonical(publicKeyJwk))
-   -> save vào IndexedDB
--> POST /devices chỉ gửi publicKeyJwk + fingerprint
+   -> save into IndexedDB
+-> POST /devices sends only publicKeyJwk + fingerprint
 ```
 
 Backend `/devices`:
 
 ```text
-Nếu public_key_jwk có field "d" -> HTTP 400
-Nếu device_id thuộc user khác -> HTTP 409
-Nếu fingerprint đổi -> record KEY_SUBSTITUTION_WARNING
-Lưu public key bundle vào server store
+If public_key_jwk has field "d" -> HTTP 400
+If device_id belongs to another user -> HTTP 409
+If the fingerprint changed -> record KEY_SUBSTITUTION_WARNING
+Store the public key bundle in the database
 ```
 
-### 6.3. Mở contact
+### 6.3. Open a contact
 
 `openContact(username)`:
 
@@ -539,23 +560,23 @@ Lưu public key bundle vào server store
 normalize username
 -> getKeyBundle(username)
 -> GET /keys/bundle/{username}
--> lấy public key + fingerprint của contact
--> kiểm tra IndexedDB safety record
--> nếu fingerprint đổi: UI "Key changed"
--> nếu lần đầu: lưu fingerprint vào safety
--> enable message input
--> refreshMessages()
+-> get the contact's public key + fingerprint
+-> check the IndexedDB safety record
+-> if the fingerprint changed: UI shows "Key changed"
+-> if first time: store the fingerprint in safety
+-> enable the message input
+-> refreshMessages({ force: true })
 ```
 
-### 6.4. Gửi message
+### 6.4. Send a message
 
 `sendMessage()`:
 
 ```text
-Đọc plaintext từ input
+Read plaintext from the input
 -> encryptPacket(plaintext)
 -> POST /messages { packet }
--> clear input
+-> clear the input
 -> refreshMessages()
 ```
 
@@ -572,7 +593,7 @@ AAD = canonical(header)
 return packet { header, nonce, ciphertext, tag }
 ```
 
-Crypto chi tiết:
+Crypto detail:
 
 ```text
 ECDH P-256 privateKey(local) + publicKey(remote)
@@ -584,133 +605,137 @@ ECDH P-256 privateKey(local) + publicKey(remote)
 -> AES-GCM encrypt
 ```
 
-### 6.5. Server nhận message
+### 6.5. Server receives the message
 
 `POST /messages`:
 
 ```text
-current_user() verify JWT
+current_user() verifies the JWT
 -> store_message(packet, user.id)
--> reject nếu packet chứa plaintext
--> reject nếu header.sender_user_id != JWT user
--> reject nếu recipient không tồn tại
--> reject nếu thiếu header/ciphertext/nonce/tag
--> append vào messages
+-> reject if the packet contains plaintext
+-> reject if header.sender_user_id != JWT user
+-> reject if the recipient does not exist
+-> reject if header/ciphertext/nonce/tag is missing
+-> ensure the conversation row exists, insert the message
 -> record CIPHERTEXT_STORED
--> WebSocket notify recipient
+-> WebSocket notify the recipient
 ```
 
-Server chỉ thấy:
+The server only sees:
 
 ```text
 sender, recipient, header metadata, nonce, ciphertext, tag
 ```
 
-Server không decrypt.
+The server does not decrypt.
 
-### 6.6. Nhận và decrypt message
+### 6.6. Receive and decrypt a message
 
 `refreshMessages()`:
 
 ```text
 GET /messages/offline?peer=bob
--> lấy messages của conversation hiện tại
--> với mỗi packet:
-   -> decryptPacket(packet)
-   -> render plaintext nếu decrypt thành công
-   -> render "Decrypt failed" nếu sai key/tag/header
+-> get the messages of the current conversation
+-> skip re-render if the message set is unchanged (anti-flicker)
+-> for each packet:
+   -> use the decrypt cache, or decryptPacket(packet)
+   -> render plaintext on success
+   -> render "Decrypt failed" on a wrong key/tag/header
+-> swap the list in one operation (no empty flash)
 ```
 
 `decryptPacket()`:
 
 ```text
-Check packet thuộc user hiện tại
--> nếu checkReplay và packet ID đã thấy: reject replay
--> fetch peer public key bundle
--> derive root key giống bên gửi
--> derive message key giống bên gửi
+Check the packet belongs to the current user
+-> if checkReplay and the packet ID was seen: reject replay
+-> fetch the peer public key bundle
+-> derive the root key like the sender
+-> derive the message key like the sender
 -> AES-GCM decrypt ciphertext + tag
 -> AAD = canonical(header)
--> nếu header/ciphertext/tag bị sửa: decrypt fail
+-> if header/ciphertext/tag was modified: decryption fails
 ```
 
-## 7. Luồng WebSocket và auto refresh
+## 7. WebSocket and Auto-Refresh Flow
 
-Khi user vào chat:
+When a user enters the chat:
 
 ```text
 connectWebSocket()
 -> open ws://host/ws
 -> send { type: "auth", access_token }
--> server verify JWT
+-> server verifies the JWT
 -> manager.connect(user_id, socket)
--> server reply { type: "auth_ok" }
+-> server replies { type: "auth_ok" }
 ```
 
-Khi Alice gửi message cho Bob:
+When Alice sends a message to Bob:
 
 ```text
 POST /messages
 -> manager.send("bob", { type: "encrypted_message", message })
--> Bob browser nhận frame
--> nếu đang mở contact: refreshMessages()
+-> Bob's browser receives the frame
+-> if the contact is open: refreshMessages()
 ```
 
-Ngoài WebSocket còn có polling fallback:
+There is also a polling fallback:
 
 ```text
 startAutoRefresh()
--> setInterval mỗi 2500ms
--> nếu đang mở contact: refreshMessages()
+-> setInterval every 2500ms
+-> if a contact is open: refreshMessages()
 ```
 
-Vì vậy F5 không mất session ngay, và message có thể tự cập nhật kể cả khi WebSocket không quan sát được ổn định.
+So F5 does not immediately lose the session, and messages can update even when the WebSocket cannot be reliably observed.
 
-## 8. Luồng decrypt tay bằng script ngoài
+## 8. Manual Decrypt Flow with an External Script
 
-Muốn giải mã tay một message đã lưu, cần đủ các dữ liệu sau:
+To manually decrypt a stored message, the following inputs are needed:
 
-| Cần gì | Lấy ở đâu | Ghi chú |
+| Needed | Where from | Note |
 |---|---|---|
-| `data/demo_store.json` | Server JSON store | Chứa packet, header, nonce, ciphertext, tag và public key peer |
-| Browser device private key | IndexedDB export của user sender hoặc recipient | File export phải có `privateKeyJwk.d` |
-| Đúng message cần decrypt | `--index`, `--message-id`, hoặc `--sender/--recipient/--number` | Sai message hoặc sai route sẽ fail |
-| Thuật toán đúng | `scripts/decrypt_message.mjs` | Dùng P-256 ECDH, HKDF-SHA256, AES-GCM giống frontend |
+| `data/secure_chat.db` | Server store (SQLite/PostgreSQL) | Contains the packet, header, nonce, ciphertext, tag, and peer public key |
+| Browser device private key | IndexedDB export of the sender or recipient user | The export file must contain `privateKeyJwk.d` |
+| The correct message | `--index`, `--message-id`, or `--sender/--recipient/--number` | A wrong message or route fails |
+| The correct algorithm | `scripts/decrypt_message.mjs` | Uses P-256 ECDH, HKDF-SHA256, AES-GCM like the frontend |
 
-Lệnh:
+Commands:
 
 ```powershell
 node scripts\decrypt_message.mjs --list
 node scripts\decrypt_message.mjs --device .\tmp\<exported-device>.json --index 0
 ```
 
-Luồng bên trong script:
+Inside the script:
 
 ```text
-Đọc server store
--> chọn message
--> đọc privateKeyJwk từ device JSON
--> tìm public key của peer trong store.devices
+Read the server store
+-> choose a message
+-> read privateKeyJwk from the device JSON
+-> find the peer's public key in the device store
 -> ECDH P-256 derive shared secret
--> HKDF root/chain/message key với label giống frontend
--> AES-GCM decrypt bằng nonce + ciphertext + tag + canonical(header)
--> nếu đúng key/header/tag: in plaintext
--> nếu sai: báo ok=false
+-> HKDF root/chain/message key with the same labels as the frontend
+-> AES-GCM decrypt with nonce + ciphertext + tag + canonical(header)
+-> if the key/header/tag is correct: print the plaintext
+-> otherwise: report ok=false
 ```
 
-Private key export chỉ dùng để debug/evidence và phải để trong `tmp/` hoặc nơi bị git ignore.
+(The helper currently reads the legacy JSON store and is being updated to read the
+SQLite database.) Exported private keys are debug/evidence only and must stay in
+`tmp/` or another git-ignored location.
 
-## 9. Luồng admin dashboard
+## 9. Admin Dashboard Flow
 
-### 9.1. Điều kiện thành admin
+### 9.1. Becoming an admin
 
-Mặc định:
+Default:
 
 ```text
 ADMIN_USERNAMES = "admin"
 ```
 
-User `admin` khi register/login sẽ có:
+The `admin` user, after register/login, has:
 
 ```json
 {
@@ -718,7 +743,7 @@ User `admin` khi register/login sẽ có:
 }
 ```
 
-Có thể cấu hình nhiều admin:
+Multiple admins can be configured:
 
 ```powershell
 $env:ADMIN_USERNAMES="admin,teacher"
@@ -727,7 +752,7 @@ $env:ADMIN_USERNAMES="admin,teacher"
 ### 9.2. Frontend admin flow
 
 ```text
-Login/register thành công
+Login/register succeeds
 -> state.user.is_admin === true
 -> enterApp()
 -> hide appPanel
@@ -739,14 +764,15 @@ Login/register thành công
 
 Admin dashboard render:
 
-| Section | Dữ liệu |
+| Section | Data |
 |---|---|
-| Storage | Store path, số users/devices/messages/sessions/events |
+| Storage | Store label, counts of users/devices/conversations/messages/sessions/events |
 | Users and password hashes | Username, role, password hash, created time |
+| Conversations | Participants, created/last-message time |
 | Stored ciphertext | Message route, nonce, ciphertext, tag, received time |
 | Device public keys | User, device, fingerprint, public key JWK |
-| Refresh token hashes | User, session id, refresh token hash, expiry, revoked |
-| Security events | Event type, actor, time, detail |
+| Refresh token hashes | User, session id, refresh-token hash, expiry, revoked |
+| Security events | Severity, event type, actor, source (IP/user-agent), time, detail |
 
 ### 9.3. Backend admin flow
 
@@ -756,117 +782,109 @@ Admin dashboard render:
 current_user()
 -> verify JWT
 -> require_admin()
--> nếu không admin: HTTP 403
--> nếu admin:
-   -> copy users with password_hash
-   -> copy devices public key only
-   -> copy messages with ciphertext only
-   -> copy refresh_sessions with hash only
-   -> copy last 100 security_events
+-> if not admin: HTTP 403
+-> if admin:
+   -> users with password_hash
+   -> devices, public key only
+   -> conversations
+   -> messages, ciphertext only
+   -> refresh_sessions, hash only
+   -> last 100 security_events
    -> record ADMIN_DASHBOARD_VIEWED
-   -> return JSON
+   -> return JSON (with the DB label password-redacted)
 ```
 
-Admin dashboard không trả:
+The admin dashboard does not return:
 
-- Raw password.
-- Raw refresh token.
-- Browser private key.
-- Plaintext message.
+- Raw passwords.
+- Raw refresh tokens.
+- Browser private keys.
+- Plaintext messages.
 
-## 10. API map nhanh
+## 10. Quick API Map
 
-| API | Ai gọi | Mục đích |
+| API | Caller | Purpose |
 |---|---|---|
-| `GET /health` | Browser/test | Kiểm tra server chạy |
-| `POST /auth/register` | Login UI | Tạo user, hash password, cấp token |
-| `POST /auth/login` | Login UI | Verify password, cấp token |
-| `POST /auth/refresh` | Browser/cookie flow | Cấp access JWT mới từ refresh cookie |
-| `POST /auth/logout` | User/admin UI | Revoke session và xóa cookie |
-| `GET /me` | Session restore | Kiểm tra token còn hợp lệ |
-| `GET /users` | User chat | Lấy contact list, user thường không thấy admin |
-| `POST /devices` | User chat | Publish public key |
-| `GET /devices` | User chat | List device của chính user |
-| `GET /keys/bundle/{username}` | User chat | Lấy public key contact |
-| `POST /messages` | User chat | Gửi encrypted packet |
-| `GET /messages/offline?peer=...` | User chat | Lấy encrypted packets theo peer |
-| `GET /admin/dashboard` | Admin | Xem server-side hash/ciphertext/public key/events |
-| `WS /ws` | User chat | Notify message mới realtime |
+| `GET /health` | Browser/test | Check the server is running |
+| `POST /auth/register` | Login UI | Create user, hash password, issue tokens |
+| `POST /auth/login` | Login UI | Verify password, issue tokens |
+| `POST /auth/refresh` | Browser/cookie flow | Issue a new access JWT from the refresh cookie |
+| `POST /auth/logout` | User/admin UI | Revoke the session and delete the cookie |
+| `GET /me` | Session restore | Check the token is still valid |
+| `GET /users` | User chat | Get the contact list; normal users do not see admins |
+| `POST /devices` | User chat | Publish the public key |
+| `GET /devices` | User chat | List the user's own devices |
+| `GET /keys/bundle/{username}` | User chat | Get a contact's public key |
+| `POST /messages` | User chat | Send an encrypted packet |
+| `GET /messages/offline?peer=...` | User chat | Get encrypted packets for a peer |
+| `GET /admin/dashboard` | Admin | View server-side hashes/ciphertext/public keys/events |
+| `WS /ws` | User chat | Realtime new-message notifications |
 
-Các `/lab/...` endpoint vẫn còn ở backend cho demo/security experiment, nhưng UI user hiện tại đã được rút gọn, chỉ còn chat và key/fingerprint view.
+The `/lab/...` endpoints remain in the backend for demo/security experiments, but the current user UI has been trimmed to chat and key/fingerprint view only.
 
-## 11. Những gì đã làm được
+## 11. What Has Been Completed
 
 ### Backend
 
-- FastAPI app chạy một server local phục vụ cả API và static frontend.
-- Register/login với password hashing.
-- Access JWT ký bằng HS256.
-- Refresh token bằng HttpOnly cookie, server chỉ lưu hash.
-- Session restore qua `/me`.
-- Logout revoke refresh session.
-- User/admin role: username `admin` là admin mặc định.
-- Admin dashboard API có `require_admin`.
-- User thường bị chặn dashboard với HTTP 403.
-- Contact list của user thường lọc admin account.
+- A FastAPI app running one local server that serves both the API and the static frontend.
+- Register/login with password hashing.
+- Access JWT signed with HS256.
+- Refresh token via an HttpOnly cookie; the server stores only the hash.
+- Session restore via `/me`.
+- Logout revokes the refresh session; expired sessions are cleaned up on login/refresh.
+- User/admin role: username `admin` is admin by default.
+- Admin dashboard API guarded by `require_admin`.
+- Normal users get HTTP 403 on the dashboard.
+- A normal user's contact list filters out admin accounts.
 - Device public key directory.
-- Backend reject private key material trong `/devices`.
-- Backend reject packet chứa plaintext.
-- Backend reject sender spoofing.
-- Ciphertext relay qua REST và WebSocket notify.
-- JSON demo store có users, sessions, devices, messages, events.
-- Pytest kiểm tra các boundary chính.
+- Backend rejects private key material in `/devices`.
+- Backend rejects packets containing plaintext.
+- Backend rejects sender spoofing.
+- Ciphertext relay over REST and WebSocket notification.
+- SQLAlchemy database (SQLite local / PostgreSQL deploy) with users, sessions, devices, conversations, messages, events; foreign keys + cascade; Alembic migrations; expired-session cleanup; events with severity/IP/user-agent.
+- Pytest covers the main boundaries plus database integrity.
 
 ### Frontend user
 
 - Login/register UI.
-- F5 vẫn restore session bằng `sessionStorage` + `/me`.
-- Tự tạo ECDH P-256 device key trong browser.
-- Private key lưu IndexedDB, không gửi server.
-- Public key/fingerprint publish lên server.
-- Contact list và manual open username.
-- Hiển thị fingerprint/key state.
-- Encrypt message bằng ECDH + HKDF + AES-GCM.
-- Decrypt message trong browser.
-- WebSocket notify và polling fallback 2.5 giây.
-- User UI chỉ còn chat + xem key/fingerprint.
+- F5 still restores the session via `sessionStorage` + `/me`.
+- Generates an ECDH P-256 device key in the browser.
+- Private key stored in IndexedDB, never sent to the server.
+- Public key/fingerprint published to the server.
+- Contact list and manual open-username.
+- Shows fingerprint/key state.
+- Encrypts messages with ECDH + HKDF + AES-GCM.
+- Decrypts messages in the browser.
+- WebSocket notifications and 2.5s polling fallback (chat re-renders only on change).
+- User UI limited to chat + key/fingerprint view.
 
 ### Frontend admin
 
-- Admin login mở dashboard riêng.
-- Xem password hash.
-- Xem refresh token hash.
-- Xem public device key.
-- Xem ciphertext/nonce/tag.
-- Xem security events.
-- Không xem plaintext/private key/raw refresh token.
+- Admin login opens a separate dashboard.
+- View password hashes.
+- View refresh-token hashes.
+- View device public keys.
+- View conversations (participants, times).
+- View ciphertext/nonce/tag.
+- View security events with severity, actor IP, and user-agent.
+- Does not show plaintext/private key/raw refresh token.
 
 ### Docs/tests
 
-- README đã cập nhật demo flow mới.
-- Có report risks/goals/architecture/demo results.
-- Có test backend cho admin dashboard và user filtering.
-- Có script decrypt tay `scripts/decrypt_message.mjs`.
-- Test backend hiện có 4 test chính trong `apps/server/tests/test_app.py`.
-- Lệnh kiểm tra nên chạy trước khi nộp: `node --check apps/web/src/app.js`, `node --check scripts/decrypt_message.mjs`, và `.\scripts\test.ps1`.
+- README updated with the current demo flow.
+- A report covering risks/goals/architecture/demo results.
+- Backend tests for the admin dashboard and user filtering.
+- A manual decrypt helper `scripts/decrypt_message.mjs`.
+- The backend test suite now has 9 tests in `apps/server/tests/` (`test_app.py` + `test_db.py`: FK, cascade, conversation, session cleanup, severity).
+- Pre-submission checks: `node --check apps/web/src/app.js`, `node --check scripts/decrypt_message.mjs`, and `.\scripts\test.ps1`.
 
-## 12. Giới hạn hiện tại
+## 12. Current Limitations
 
-- Đây là course prototype, chưa phải production secure messenger.
-- Chưa phải full Signal protocol.
-- Chưa có X3DH, signed prekeys, skipped-message keys hoặc full Double Ratchet.
-- PCS hiện chủ yếu là lab/concept endpoint, chưa phải ratchet production.
-- IndexedDB private key không chống được XSS/malware/browser extension độc hại.
-- JSON file store chỉ phù hợp demo local, chưa phải DB production.
-- Access JWT đang tự implement bằng HMAC trong demo; production nên dùng thư viện JWT chuẩn và cấu hình secret nghiêm túc hơn.
-- Script decrypt tay cần export private key ra file tạm, nên chỉ dùng cho demo/evidence và không được commit file đó.
-
-## 13. Câu nhớ nhanh khi thuyết trình
-
-```text
-JWT dùng để biết ai được gọi server.
-Private key trong IndexedDB dùng để biết ai đọc được message.
-Server chỉ lưu hash, public key và ciphertext.
-Admin xem được dữ liệu server đang lưu, nhưng không xem được plaintext/private key.
-User thường chỉ chat và xem fingerprint/key.
-```
+- This is a course prototype, not a production secure messenger.
+- Not a full Signal protocol.
+- No X3DH, signed prekeys, skipped-message keys, or full Double Ratchet.
+- PCS is mostly a lab/concept endpoint, not a production ratchet.
+- IndexedDB private keys do not protect against XSS/malware/malicious browser extensions.
+- Storage is already a real database (SQLite local / PostgreSQL deploy, Alembic migrations); the main remaining limitations are the crypto core, deployment/CI, rate limiting, and key recovery.
+- The access JWT is a hand-written HMAC in the demo; production should use a vetted JWT library and stricter secret management.
+- The manual decrypt helper needs a private key exported to a temp file, so it is for demo/evidence only and that file must not be committed.

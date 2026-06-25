@@ -22,6 +22,8 @@ Implemented behavior:
 - Refresh tokens are opaque random values in an HttpOnly cookie.
 - The server stores only a SHA-256 hash of each refresh token.
 - Logout revokes matching refresh sessions and deletes the refresh cookie.
+- Expired refresh sessions are purged from the database during login/refresh.
+- Auth-related security events (register, login, failed login, logout-related, key-substitution, admin view) are recorded with a severity level, the actor IP, and the user-agent.
 - WebSocket authentication is performed with an auth frame after the socket opens.
 - Username `admin` is treated as admin by default through `ADMIN_USERNAMES`.
 - Admin users are routed to the server dashboard; normal users are routed to chat/key inspection.

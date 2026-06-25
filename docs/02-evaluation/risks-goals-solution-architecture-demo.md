@@ -2,89 +2,96 @@
 
 ## Project Overview
 
-Tên project: Secure Web Chat with JWT Authentication, Hybrid Ratchet and Post-Compromise Security.
+Project name: Secure Web Chat with JWT Authentication, Hybrid Ratchet and Post-Compromise Security.
 
-Mục tiêu của project là xây dựng một prototype chat bảo mật để minh họa sự khác nhau giữa xác thực người dùng và mã hóa đầu cuối. Server dùng JWT để kiểm soát quyền truy cập API, nhưng nội dung tin nhắn được mã hóa và giải mã ở trình duyệt bằng Web Crypto. Server chỉ đóng vai trò đăng nhập, quản lý public key, lưu/relay ciphertext và cung cấp dashboard admin để quan sát dữ liệu thật được lưu ở phía server.
+The goal of the project is to build a secure-chat prototype that illustrates the
+difference between user authentication and end-to-end encryption. The server uses
+JWT to control API access, but message content is encrypted and decrypted in the
+browser with the Web Crypto API. The server only handles login, public-key
+management, ciphertext storage/relay, and an admin dashboard for observing the
+real data stored on the server side.
 
-Stack hiện tại:
+Current stack:
 
-| Thành phần | Công nghệ | Vai trò |
+| Component | Technology | Role |
 |---|---|---|
 | Backend | Python FastAPI | Auth, JWT, refresh session, device directory, ciphertext relay, admin dashboard |
-| Frontend | HTML, CSS, vanilla JavaScript | Login, user chat, key/fingerprint view, admin dashboard |
+| Frontend | Vanilla JavaScript + Tabler/Bootstrap (CDN) | Login, user chat, key/fingerprint view, admin dashboard |
 | Client crypto | Browser Web Crypto API | ECDH P-256, HKDF-SHA256, AES-GCM, SHA-256 fingerprint |
 | Client storage | IndexedDB, sessionStorage | Private device key, safety/fingerprint state, access-token session |
-| Server storage | Local JSON demo store | User hash, refresh-token hash, public key, ciphertext packet, events |
-| Test/tooling | Pytest, FastAPI TestClient, Node Web Crypto helper | Backend API/security-boundary tests and manual ciphertext decrypt checks |
+| Server storage | SQLAlchemy: SQLite (local) / PostgreSQL (deploy), Alembic migrations | User hash, refresh-token hash, public key, conversations, ciphertext packet, events |
+| Test/tooling | Pytest, FastAPI TestClient, Node Web Crypto helper | Backend API/security-boundary + database tests, manual ciphertext decrypt checks |
 
 ## 1. Risks to Security Goals
 
-Project phân tích rủi ro theo ba nhóm: storage risks, exchange risks, và process/logic risks. Mỗi rủi ro được nối với một security goal cụ thể để khi demo có thể chứng minh bằng dữ liệu quan sát được.
+Risks are grouped into three categories: storage risks, exchange risks, and
+process/logic risks. Each risk is mapped to a concrete security goal so the demo
+can prove it with observable data.
 
 ### 1.1. Storage Risks
 
-Storage risks là nhóm rủi ro liên quan đến dữ liệu được lưu trên server, browser và file store.
+Storage risks concern data stored on the server, in the browser, and in the data store.
 
-| Risk | Mô tả | Security goal | Cách project xử lý |
+| Risk | Description | Security goal | How the project handles it |
 |---|---|---|---|
-| Server store compromise | Attacker đọc được `data/demo_store.json` hoặc dashboard dữ liệu server | Server không được lưu plaintext message và private key | Server chỉ lưu password hash, refresh-token hash, public key, nonce, ciphertext, tag và metadata |
-| Password database leak | Attacker lấy được danh sách user và password hash | Không lưu password dạng rõ | Password được hash bằng Argon2id nếu dependency đầy đủ, fallback scrypt chỉ dùng cho dev |
-| Refresh token leak từ store | Attacker đọc session store | Không lưu refresh token dạng rõ | Server chỉ lưu SHA-256 hash của refresh token |
-| Private key bị upload lên server | Client gửi nhầm private JWK | Private key phải ở browser | `/devices` reject public_key_jwk nếu có field private `d` |
-| Browser IndexedDB bị đọc bởi XSS/malware | Script độc trên browser lấy private key hoặc state | Không claim chống full browser compromise | Tài liệu nêu rõ limitation; private key vẫn tốt hơn lưu ở server nhưng không chống được browser đã bị chiếm |
-| Private key export để decrypt tay bị commit nhầm | File export chứa `privateKeyJwk.d` | Private key export chỉ dùng tạm, không đưa lên server/git | `.gitignore` bỏ qua `tmp/`, docs nhắc giữ file export ngoài repo |
+| Server store compromise | Attacker reads the server database (`data/secure_chat.db` or PostgreSQL) or the server-data dashboard | The server must not store plaintext messages or private keys | The server stores only password hashes, refresh-token hashes, public keys, nonce, ciphertext, tag, and metadata |
+| Password database leak | Attacker obtains the user list and password hashes | Do not store passwords in cleartext | Passwords are hashed with Argon2id when the dependency is present; the scrypt fallback is dev-only |
+| Refresh token leak from the store | Attacker reads the session store | Do not store refresh tokens in cleartext | The server stores only the SHA-256 hash of each refresh token |
+| Private key uploaded to the server | Client mistakenly sends a private JWK | The private key must stay in the browser | `/devices` rejects `public_key_jwk` that contains the private field `d` |
+| Browser IndexedDB read by XSS/malware | Malicious script reads the private key or state | No claim of full browser-compromise protection | Documented as a limitation; client-side keys are better than server storage but do not protect a compromised browser |
+| Exported private key (for manual decrypt) committed by mistake | An export file contains `privateKeyJwk.d` | Key exports are temporary and must not reach the server/git | `.gitignore` ignores `tmp/`; docs remind keeping exports outside the repo |
 
-Security goals từ storage risks:
+Security goals from storage risks:
 
-- SG-S1: Server compromise không làm lộ plaintext message.
-- SG-S2: Server không giữ private key của user.
-- SG-S3: Password và refresh token không được lưu dạng rõ.
-- SG-S4: Admin dashboard chỉ quan sát dữ liệu server đang lưu, không được làm lộ plaintext hoặc private key.
+- SG-S1: Server compromise does not expose plaintext messages.
+- SG-S2: The server does not hold user private keys.
+- SG-S3: Passwords and refresh tokens are not stored in cleartext.
+- SG-S4: The admin dashboard only observes stored server data; it must not expose plaintext or private keys.
 
 ### 1.2. Exchange Risks
 
-Exchange risks là nhóm rủi ro khi dữ liệu đi qua API, WebSocket hoặc public key directory.
+Exchange risks concern data moving through the API, WebSocket, or public-key directory.
 
-| Risk | Mô tả | Security goal | Cách project xử lý |
+| Risk | Description | Security goal | How the project handles it |
 |---|---|---|---|
-| Stolen JWT | Attacker có access token và gọi API như user | JWT chỉ xác thực request, không giải mã message | JWT không chứa private key hoặc message key |
-| Message bị đọc trên đường truyền/server relay | Server hoặc attacker thấy packet khi relay | Packet gửi lên server phải là ciphertext | Browser encrypt bằng AES-GCM trước khi `POST /messages` |
-| Tamper ciphertext/header | Attacker sửa ciphertext hoặc metadata | Client phải phát hiện sửa đổi | AES-GCM dùng canonical header làm associated data |
-| Replay packet cũ | Attacker gửi lại message cũ | Client/lab phải phát hiện duplicate packet | Packet ID dựa trên conversation, sender, recipient, message number |
-| Key substitution | Server/middleman thay public key của contact | Người dùng phải thấy fingerprint/key warning | UI hiển thị fingerprint và lưu safety state |
-| WebSocket spoof | Kết nối realtime không xác thực | WebSocket phải auth bằng JWT trước khi nhận notify | `/ws` yêu cầu frame `auth` chứa access token hợp lệ |
+| Stolen JWT | Attacker holds an access token and calls the API as the user | A JWT only authenticates requests; it does not decrypt messages | The JWT contains no private key or message key |
+| Message read in transit / on relay | Server or attacker sees the packet during relay | Packets sent to the server must be ciphertext | The browser encrypts with AES-GCM before `POST /messages` |
+| Tamper with ciphertext/header | Attacker modifies ciphertext or metadata | The client must detect modification | AES-GCM uses the canonical header as associated data |
+| Replay an old packet | Attacker resends an old message | Client/lab must detect duplicate packets | Packet ID derived from conversation, sender, recipient, message number |
+| Key substitution | Server/middleman swaps a contact's public key | The user must see a fingerprint/key warning | The UI shows fingerprints and stores safety state |
+| WebSocket spoof | Unauthenticated realtime connection | WebSocket must authenticate with a JWT before receiving notifications | `/ws` requires an `auth` frame with a valid access token |
 
-Security goals từ exchange risks:
+Security goals from exchange risks:
 
-- SG-E1: Có JWT không đồng nghĩa với đọc được plaintext.
-- SG-E2: Server chỉ relay encrypted packet.
-- SG-E3: Sửa ciphertext hoặc header phải làm decrypt fail.
-- SG-E4: Public key substitution phải visible qua fingerprint/key-change warning.
-- SG-E5: Realtime channel vẫn phải kiểm tra access token.
+- SG-E1: Holding a JWT does not mean being able to read plaintext.
+- SG-E2: The server only relays encrypted packets.
+- SG-E3: Modifying ciphertext or the header must make decryption fail.
+- SG-E4: Public-key substitution must be visible via a fingerprint/key-change warning.
+- SG-E5: The realtime channel must still verify the access token.
 
 ### 1.3. Process and Logic Risks
 
-Process/logic risks là nhóm rủi ro do lỗi nghiệp vụ, sai thứ tự xử lý hoặc claim bảo mật quá mức.
+Process/logic risks come from business-logic errors, wrong processing order, or over-claiming security.
 
-| Risk | Mô tả | Security goal | Cách project xử lý |
+| Risk | Description | Security goal | How the project handles it |
 |---|---|---|---|
-| Plaintext sent to server by mistake | Frontend gửi field `plaintext` trong packet | Backend phải chặn trước khi lưu | `store_message()` reject packet nếu canonical JSON chứa `plaintext` |
-| Sender spoofing | User A gửi packet nhưng header ghi sender là user B | Sender trong packet phải khớp JWT user | Backend check `sender_user_id == actor_user_id` |
-| Message gửi đến user không tồn tại | Packet có recipient sai | Server không lưu packet route sai | Backend trả HTTP 404 nếu recipient không tồn tại |
-| Admin dashboard bị mở cho user thường | User thường xem hash/ciphertext toàn hệ thống | Dashboard chỉ dành cho admin | `/admin/dashboard` dùng dependency `require_admin` |
-| Contact list làm lộ admin account | User thường thấy account admin như contact chat | User chat chỉ nên thấy user thường | `/users` lọc admin khỏi danh sách user thường |
-| Claim full Signal/production security | Prototype bị trình bày quá mức | Báo cáo phải nêu rõ giới hạn | Docs ghi đây là course prototype, chưa phải full Signal |
+| Plaintext sent to the server by mistake | Frontend sends a `plaintext` field in the packet | The backend must block it before storage | `store_message()` rejects packets whose canonical JSON contains `plaintext` |
+| Sender spoofing | User A sends a packet whose header claims sender is user B | The packet sender must match the JWT user | Backend checks `sender_user_id == actor_user_id` |
+| Message to a non-existent user | Packet has a wrong recipient | The server does not store mis-routed packets | Backend returns HTTP 404 if the recipient does not exist |
+| Admin dashboard opened to normal users | A normal user views system-wide hashes/ciphertext | The dashboard is admin-only | `/admin/dashboard` uses the `require_admin` dependency |
+| Contact list leaks admin accounts | A normal user sees admin accounts as chat contacts | A user should only see normal users | `/users` filters admins out of the normal-user list |
+| Claiming full Signal/production security | The prototype is over-presented | The report must state its limits | Docs state this is a course prototype, not full Signal |
 
-Security goals từ process/logic risks:
+Security goals from process/logic risks:
 
-- SG-P1: Backend validation phải bảo vệ boundary trước khi lưu dữ liệu.
-- SG-P2: Role admin/user phải tách rõ.
-- SG-P3: Demo phải trung thực với giới hạn của MVP.
-- SG-P4: Các security claim phải có test hoặc demo evidence.
+- SG-P1: Backend validation must protect the boundary before storing data.
+- SG-P2: Admin/user roles must be clearly separated.
+- SG-P3: The demo must be honest about MVP limitations.
+- SG-P4: Security claims must have tests or demo evidence.
 
 ## 2. Solution Architecture
 
-### 2.1. Kiến trúc tổng quan
+### 2.1. Overall Architecture
 
 ```text
 +-------------------------+        REST/JWT         +--------------------------+
@@ -98,7 +105,7 @@ Security goals từ process/logic risks:
              | E2EE ciphertext only                              |
              v                                                   v
 +------------+------------+                         +------------+-------------+
-| Peer browser            |                         | JSON demo store          |
+| Peer browser            |                         | SQLite / PostgreSQL DB   |
 | - Own private key       |                         | - password hashes        |
 | - Decrypt locally       |                         | - refresh token hashes   |
 | - Fingerprint state     |                         | - public keys only       |
@@ -122,7 +129,9 @@ User submits username/password
 -> API calls use Authorization: Bearer <access_token>
 ```
 
-Điểm quan trọng: JWT chỉ trả lời câu hỏi "ai được gọi server". JWT không trả lời câu hỏi "ai đọc được message". Message chỉ đọc được nếu browser có private device key và derive đúng AES-GCM key.
+Key point: a JWT only answers "who may call the server". It does not answer "who
+can read the message". A message is readable only if the browser has the private
+device key and derives the correct AES-GCM key.
 
 ### 2.3. Device and Key Architecture
 
@@ -137,7 +146,7 @@ Browser generates ECDH P-256 key pair
 -> Server rejects key material if JWK contains private field "d"
 ```
 
-Server-side public key bundle gồm:
+The server-side public key bundle contains:
 
 - `device_id`
 - `user_id`
@@ -147,7 +156,7 @@ Server-side public key bundle gồm:
 - `created_at`
 - `last_seen_at`
 
-Không có private key trong server store.
+No private key is stored on the server.
 
 ### 2.4. Message Encryption Architecture
 
@@ -197,7 +206,8 @@ ECDH-P-256+HKDF-SHA256+AES-GCM
 
 ### 2.5. Admin Dashboard Architecture
 
-Admin dashboard được thêm để phục vụ yêu cầu quan sát dữ liệu thật đang lưu ở server.
+The admin dashboard was added to satisfy the requirement of observing the real
+data the server is storing.
 
 ```text
 Admin login
@@ -209,32 +219,33 @@ Admin login
 -> UI renders tables for hashes, ciphertext, public keys, events
 ```
 
-Admin dashboard hiển thị:
+The admin dashboard shows:
 
-- User list và password hash.
-- Refresh session và refresh token hash.
-- Device public keys và fingerprints.
-- Stored ciphertext với nonce, ciphertext, tag, route metadata.
-- Security events.
-- Store path và số lượng record.
+- User list and password hashes.
+- Refresh sessions and refresh-token hashes.
+- Device public keys and fingerprints.
+- Stored ciphertext with nonce, ciphertext, tag, route metadata.
+- Conversations.
+- Security events (with severity, actor IP, user-agent).
+- Store path and record counts.
 
-Admin dashboard không hiển thị:
+The admin dashboard does not show:
 
-- Plaintext message.
-- Browser private key.
-- Raw refresh token.
+- Plaintext messages.
+- Browser private keys.
+- Raw refresh tokens.
 
 ## 3. Demonstration Architecture
 
 ### 3.1. Demonstration Roles
 
-| Role | Account | Mục đích |
+| Role | Account | Purpose |
 |---|---|---|
-| Admin | `admin / pass1234` | Xem server dashboard: hash pass, ciphertext, public key, session hash |
-| User A | `alice / pass1234` | Gửi encrypted message |
-| User B | `bob / pass1234` | Nhận và decrypt encrypted message trong browser |
+| Admin | `admin / pass1234` | View the server dashboard: password hashes, ciphertext, public keys, session hashes |
+| User A | `alice / pass1234` | Send an encrypted message |
+| User B | `bob / pass1234` | Receive and decrypt the encrypted message in the browser |
 
-Username `admin` là admin mặc định. Có thể đổi danh sách admin bằng env:
+Username `admin` is an admin by default. The admin list can be changed with an env var:
 
 ```powershell
 $env:ADMIN_USERNAMES="admin,teacher"
@@ -256,16 +267,16 @@ Login as alice
 -> Browser decrypts locally
 ```
 
-User screen chỉ còn:
+The user screen contains only:
 
 - Contact list.
-- Manual open username.
+- Manual open-username.
 - Fingerprint/key view.
 - Conversation.
 - Message composer.
 - Realtime/sync badge.
 
-User screen không còn admin/server lab panel.
+The user screen has no admin/server-lab panel.
 
 ### 3.3. Admin Demonstration Architecture
 
@@ -277,25 +288,26 @@ Login as admin
 -> Render server-side data tables
 ```
 
-Dashboard dùng để chứng minh:
+The dashboard is used to prove:
 
-- Server có password hash, không có password rõ.
-- Server có refresh-token hash, không có refresh token rõ.
-- Server có public key, không có private key.
-- Server có ciphertext, nonce, tag, không có plaintext.
-- Server có event log cho các hành động quan trọng.
+- The server has password hashes, not cleartext passwords.
+- The server has refresh-token hashes, not cleartext refresh tokens.
+- The server has public keys, not private keys.
+- The server has ciphertext, nonce, tag, not plaintext.
+- The server has an event log for important actions.
 
 ### 3.4. Backend Test Architecture
 
-Pytest dùng FastAPI TestClient để kiểm tra security boundary:
+Pytest uses the FastAPI TestClient to verify security boundaries:
 
-| Test group | Mục tiêu |
+| Test group | Goal |
 |---|---|
-| Register/login/device/message/lab flow | Auth, public key registration, ciphertext-only storage |
-| Plaintext rejection | Packet chứa plaintext bị reject HTTP 400 |
-| Admin dashboard authorization | User thường bị 403, admin xem được dashboard |
-| Contact list filtering | User thường không thấy admin account trong contact list |
-| Manual decrypt helper | Kiểm tra một ciphertext thật chỉ decrypt được khi có đúng private key browser |
+| Register/login/device/message/lab flow | Auth, public-key registration, ciphertext-only storage |
+| Plaintext rejection | A packet containing plaintext is rejected with HTTP 400 |
+| Admin dashboard authorization | Normal users get 403; admins can view the dashboard |
+| Contact list filtering | Normal users do not see admin accounts in the contact list |
+| Database integrity | Foreign keys, cascade delete, conversation normalisation, expired-session cleanup, event severity/IP |
+| Manual decrypt helper | A stored ciphertext decrypts only with the correct browser private key |
 
 ## 4. Demonstration Results
 
@@ -336,13 +348,21 @@ http://127.0.0.1:8000/admin
 
 ### 4.2. Verification Targets
 
-Khi môi trường Python/venv đầy đủ, backend test suite hiện có 4 test chính:
+With a complete Python/venv environment, the backend test suite currently has 9 tests (API boundary + DB integrity):
 
 ```text
+# apps/server/tests/test_app.py (API / security boundaries)
 test_register_login_device_and_ciphertext_lab_flow
 test_server_rejects_plaintext_in_message_packet
 test_admin_dashboard_exposes_server_side_demo_records_to_admin_only
 test_normal_user_contact_list_hides_admin_accounts
+
+# apps/server/tests/test_db.py (database integrity)
+test_foreign_key_rejects_orphan_message
+test_sending_message_normalises_conversation
+test_deleting_user_cascades_to_their_data
+test_expired_sessions_are_cleaned_up
+test_security_events_capture_severity_and_ip
 ```
 
 JavaScript syntax check:
@@ -359,6 +379,7 @@ GET /health
 ok = true
 service = secure-web-chat
 password_hasher = argon2id
+database = sqlite
 ```
 
 Smoke test admin:
@@ -412,33 +433,34 @@ Normal user UI remains chat/key-focused
 | Password storage | Password hash visible, raw password absent | Covered by backend test suite |
 | Ciphertext storage | Server stores ciphertext/nonce/tag | Covered by message test case |
 | Plaintext guard | Packet containing plaintext rejected | Covered by backend test suite |
+| Database integrity | Foreign keys/cascade/conversation/cleanup hold | Covered by `test_db.py` |
 | Manual decrypt helper | Stored packet can be checked with correct exported browser private key | Implemented by `scripts/decrypt_message.mjs` |
 | JS syntax | Frontend app and decrypt helper parse successfully | Verified by `node --check` |
 
 ### 4.5. Discussion
 
-Kết quả demo cho thấy project đạt mục tiêu chính của một secure web chat prototype:
+The demo results show the project meets the main goals of a secure-web-chat prototype:
 
-1. Server có thể xác thực và relay message nhưng không cần plaintext.
-2. Admin có thể xem rõ dữ liệu server thật sự đang lưu: hash password, hash refresh token, public key và ciphertext.
-3. User thường chỉ dùng chức năng chat và xem key/fingerprint, không có quyền xem dashboard server.
-4. JWT và E2EE được tách rõ: JWT dùng cho quyền gọi API; browser private key và Web Crypto dùng cho quyền đọc message.
-5. Backend có test cho các boundary quan trọng: không lưu plaintext, không mở dashboard admin cho user thường, không đưa admin vào contact list user thường.
-6. Có thể kiểm tra độc lập một ciphertext bằng `scripts/decrypt_message.mjs` khi có đúng private key browser, giúp xác nhận thuật toán Web Crypto khớp với packet server lưu.
+1. The server can authenticate and relay messages without needing plaintext.
+2. The admin can clearly see the data the server actually stores: password hashes, refresh-token hashes, public keys, and ciphertext.
+3. Normal users only chat and view keys/fingerprints; they cannot access the server dashboard.
+4. JWT and E2EE are clearly separated: JWT for API authorization; the browser private key and Web Crypto for the right to read messages.
+5. The backend has tests for the important boundaries: no plaintext storage, no admin dashboard for normal users, no admin accounts in a normal user's contact list.
+6. A single ciphertext can be checked independently with `scripts/decrypt_message.mjs` given the correct browser private key, confirming that the Web Crypto algorithm matches the packet the server stores.
 
 ### 4.6. Limitations
 
-Đây là course prototype, không phải production messenger:
+This is a course prototype, not a production messenger:
 
-- Chưa phải full Signal implementation.
-- Chưa có X3DH, signed prekeys, skipped-message keys hoặc full Double Ratchet.
-- PCS hiện được minh họa ở mức concept/lab metric, chưa phải proof của full ratchet.
-- Browser compromise, XSS, malware hoặc malicious extension vẫn có thể lấy token/key trong browser.
-- JSON store phù hợp demo local, không phải database production.
+- Not a full Signal implementation.
+- No X3DH, signed prekeys, skipped-message keys, or full Double Ratchet.
+- PCS is currently shown as a concept/lab metric, not a proof of a full ratchet.
+- Browser compromise, XSS, malware, or malicious extensions can still read tokens/keys in the browser.
+- Storage is already a real database (SQLite local / PostgreSQL deploy, Alembic migrations); the main remaining limitations are the crypto core (full Double Ratchet/PCS) and deployment/CI, not the storage layer.
 
 ## Conclusion
 
-Project chứng minh được thông điệp chính:
+The project demonstrates its core message:
 
 ```text
 JWT answers who can call the server.

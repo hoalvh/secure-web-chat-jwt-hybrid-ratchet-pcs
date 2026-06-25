@@ -19,7 +19,7 @@ This document defines the security assumptions, protected assets, trust boundari
 
 - The server is trusted for account routing and availability, but not for message confidentiality.
 - The client browser is trusted only while it is not affected by XSS, malware, or malicious extensions.
-- The JSON demo store is treated as potentially compromised in the server-compromise experiment.
+- The server database (SQLite locally, PostgreSQL when deployed) is treated as potentially compromised in the server-compromise experiment.
 - Public keys fetched from the server require verification through fingerprints or key-change warnings.
 
 ## Attacker Scenarios
@@ -42,7 +42,7 @@ Each scenario should include attacker capability, expected impact, mitigation, a
 | Public key substitution must be visible | Fingerprint and key-change UI | Users/evaluators can see when a contact key changes |
 | Temporary state compromise should be measurable | Symmetric key evolution plus PCS lab metric | Experiments can explain exposure before and after rekey |
 | Replay/tamper should be rejected | AES-GCM associated data and packet IDs | Modified packets fail authentication or replay checks |
-| Server store compromise should be demonstrable | JSON ciphertext store and admin dashboard | Admin/lab evidence can inspect stored rows and show ciphertext-only data |
+| Server store compromise should be demonstrable | Ciphertext stored in the database and admin dashboard | Admin/lab evidence can inspect stored rows and show ciphertext-only data |
 | Browser risk should be explicit | IndexedDB threat note and XSS limitation | Browser-side key storage has limits that must be documented |
 
 ## Server Trust Boundary
