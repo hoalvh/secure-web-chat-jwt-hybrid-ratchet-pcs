@@ -428,17 +428,25 @@ async function loadUsers() {
     item.className = "user-item";
     item.addEventListener("click", () => openContact(user.username));
 
+    const left = document.createElement("span");
+    left.className = "user-left";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar avatar-sm";
+    avatar.textContent = (user.username[0] || "?").toUpperCase();
+
     const text = document.createElement("span");
+    text.className = "user-meta";
     const name = document.createElement("strong");
     name.textContent = user.username;
     const meta = document.createElement("small");
     meta.textContent = user.created_at ? `Joined ${new Date(user.created_at).toLocaleDateString()}` : "Ready";
     text.append(name, meta);
+    left.append(avatar, text);
 
     const action = document.createElement("span");
     action.className = "user-action";
     action.textContent = "Chat";
-    item.append(text, action);
+    item.append(left, action);
     list.append(item);
   }
 }
@@ -488,30 +496,27 @@ function appendEmptyRow(tbody, colspan, message) {
 function renderAdminStats(storage) {
   const stats = $("#adminStats");
   stats.innerHTML = "";
+  // icon + colour come from this fixed whitelist (no user data), so the static
+  // markup below is safe; the dynamic value/label are set via textContent.
   const items = [
-    ["Users", storage.users],
-    ["Devices", storage.devices],
-    ["Conversations", storage.conversations ?? 0],
-    ["Messages", storage.messages],
-    ["Sessions", storage.refresh_sessions],
-    ["Events", storage.security_events],
+    ["Users", storage.users, "ti-users", "bg-primary"],
+    ["Devices", storage.devices, "ti-device-desktop", "bg-azure"],
+    ["Conversations", storage.conversations ?? 0, "ti-messages", "bg-purple"],
+    ["Messages", storage.messages, "ti-lock", "bg-green"],
+    ["Sessions", storage.refresh_sessions, "ti-key", "bg-orange"],
+    ["Events", storage.security_events, "ti-activity", "bg-red"],
   ];
-  for (const [label, value] of items) {
+  for (const [label, value, icon, color] of items) {
     const col = document.createElement("div");
     col.className = "col-6 col-sm-4 col-xl-2";
-    const card = document.createElement("div");
-    card.className = "card card-sm";
-    const body = document.createElement("div");
-    body.className = "card-body";
-    const name = document.createElement("div");
-    name.className = "subheader";
-    name.textContent = label;
-    const number = document.createElement("div");
-    number.className = "h1 m-0";
-    number.textContent = value;
-    body.append(name, number);
-    card.append(body);
-    col.append(card);
+    col.innerHTML =
+      '<div class="card card-sm"><div class="card-body">' +
+      '<div class="row align-items-center">' +
+      `<div class="col-auto"><span class="avatar ${color} text-white"><i class="ti ${icon}"></i></span></div>` +
+      '<div class="col"><div class="h1 mb-0 stat-value"></div><div class="text-secondary stat-label"></div></div>' +
+      "</div></div></div>";
+    col.querySelector(".stat-value").textContent = value;
+    col.querySelector(".stat-label").textContent = label;
     stats.append(col);
   }
 }

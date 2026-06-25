@@ -29,17 +29,24 @@
   font-size: 18px;
 }
 
-.auth-steps .step-num {
-  display: inline-grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  margin-bottom: 6px;
-  border-radius: 8px;
-  background: #e7f6f3;
-  color: var(--sc-accent);
-  font-weight: 800;
-  font-size: 13px;
+.auth-hero {
+  min-height: calc(100vh - 4rem);
+}
+
+.auth-intro {
+  max-width: 460px;
+  margin-left: auto;
+}
+
+.auth-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.auth-feature .avatar {
+  flex: none;
 }
 
 .status-log {
@@ -100,10 +107,23 @@
   border-color: #c7d7fe;
 }
 
-.user-item span:first-child {
+.user-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-meta {
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.user-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-item small {
@@ -305,8 +325,17 @@
   background: #f8fafc;
 }
 
-.conversation-empty {
-  min-height: 100%;
+/* The chat "no conversation" placeholder centers itself and drops the dashed box. */
+.message-list .conversation-empty {
+  margin: auto;
+  min-height: auto;
+  border: 0;
+  background: transparent;
+}
+
+.chat-empty-icon {
+  font-size: 2.5rem;
+  opacity: 0.4;
 }
 
 [hidden] {
