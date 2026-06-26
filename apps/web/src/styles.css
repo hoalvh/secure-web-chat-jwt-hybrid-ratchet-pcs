@@ -295,7 +295,27 @@
   white-space: nowrap;
   font-family: "Cascadia Code", Consolas, monospace;
   color: #1f2937;
-  cursor: help;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.1s ease;
+}
+
+/* Hover reveals the full value (stays selectable so you can drag to copy). */
+.admin-table td code:hover {
+  max-width: 460px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: visible;
+  padding: 3px 5px;
+  background: #fffbea;
+  box-shadow: inset 0 0 0 1px #f0d98a;
+  cursor: text;
+}
+
+/* Flash after a click-to-copy. */
+.admin-table td code.copied {
+  background: #d1fae5 !important;
+  box-shadow: inset 0 0 0 1px #6ee7b7 !important;
 }
 
 .source-cell {

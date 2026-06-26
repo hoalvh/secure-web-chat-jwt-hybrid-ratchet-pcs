@@ -461,13 +461,24 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
 }
 
+async function copyCell(text, el) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    // clipboard may be unavailable (e.g. insecure context); ignore
+  }
+  el.classList.add("copied");
+  setTimeout(() => el.classList.remove("copied"), 800);
+}
+
 function appendCell(row, value, options = {}) {
   const cell = document.createElement("td");
   if (options.code) {
     const code = document.createElement("code");
     const text = typeof value === "string" ? value : JSON.stringify(value);
     code.textContent = text;
-    code.title = text; // full value on hover; cell itself is truncated
+    code.title = "Click to copy"; // hover expands the value; click copies it
+    code.addEventListener("click", () => copyCell(text, code));
     cell.append(code);
   } else {
     cell.textContent = textOrDash(value);
