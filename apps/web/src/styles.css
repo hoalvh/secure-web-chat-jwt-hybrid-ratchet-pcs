@@ -358,6 +358,29 @@
   opacity: 0.4;
 }
 
+/* New-device notice: an honest E2EE explanation, styled as info (not an error). */
+.device-note {
+  display: grid;
+  place-items: start;
+  gap: 4px;
+  text-align: left;
+  min-height: auto;
+  padding: 12px 14px;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  background: #eef4ff;
+  color: #1e3a8a;
+}
+
+.device-note strong {
+  font-size: 13px;
+}
+
+.device-note span {
+  font-size: 12px;
+  color: #3b5b8c;
+}
+
 [hidden] {
   display: none !important;
 }

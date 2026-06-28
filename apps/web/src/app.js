@@ -14,6 +14,7 @@ const state = {
   refreshTimer: null,
   renderedKey: null,
   decryptCache: new Map(),
+  contactKeyChanged: false,
 };
 
 const SESSION_KEY = "secure-chat-session";
@@ -680,6 +681,7 @@ async function openContact(username) {
   const safetyId = `${state.user.id}:${clean}`;
   const savedSafety = await idbGet("safety", safetyId);
   const current = state.contactBundle.fingerprint;
+  state.contactKeyChanged = Boolean(savedSafety && savedSafety.fingerprint !== current);
   if (savedSafety && savedSafety.fingerprint !== current) {
     $("#trustBadge").className = "badge bad";
     setText("#trustBadge", "Key changed");
@@ -734,32 +736,68 @@ async function refreshMessages(options = {}) {
     empty.textContent = "No messages in this conversation";
     fragment.append(empty);
   }
+
+  // First pass: decrypt (or read from cache). Only successes are cached, so a
+  // cache hit always means status "ok".
+  const resolved = [];
   for (const message of messages) {
     const packet = message.packet;
     const cacheKey = packetKey(packet);
-    let body;
-    let failed = false;
     if (state.decryptCache.has(cacheKey)) {
-      body = state.decryptCache.get(cacheKey);
-    } else {
-      try {
-        body = await decryptPacket(packet);
-        state.packetIds.add(cacheKey);
-        state.decryptCache.set(cacheKey, body); // cache so re-renders skip crypto
-      } catch (error) {
-        body = `Decrypt failed: ${error.message}`;
-        failed = true;
-      }
+      resolved.push({ packet, status: "ok", body: state.decryptCache.get(cacheKey) });
+      continue;
     }
+    try {
+      const body = await decryptPacket(packet);
+      state.packetIds.add(cacheKey);
+      state.decryptCache.set(cacheKey, body); // cache so re-renders skip crypto
+      resolved.push({ packet, status: "ok", body });
+    } catch (error) {
+      resolved.push({ packet, status: "fail", body: error.message });
+    }
+  }
+
+  // If EVERY message fails to decrypt and the contact's key has NOT changed, the
+  // cause is almost certainly that this browser holds a different device key (the
+  // user signed in on a new machine or cleared storage), not tampering. Show an
+  // honest E2EE explanation instead of a scary error on every bubble. When only
+  // SOME messages fail (tamper demo, SG-E3) or the contact key changed (key
+  // substitution, SG-E5) we keep the explicit failure so those stay visible.
+  const failedCount = resolved.filter((item) => item.status === "fail").length;
+  const newDevice = resolved.length > 1 && failedCount === resolved.length && !state.contactKeyChanged;
+
+  if (newDevice) {
+    const note = document.createElement("div");
+    note.className = "empty-state device-note";
+    const title = document.createElement("strong");
+    title.textContent = "New device — earlier messages stay on your previous device";
+    const detail = document.createElement("span");
+    detail.textContent =
+      "They were encrypted for your old device key, which never leaves that browser. " +
+      "That is expected end-to-end encryption; new messages here will decrypt normally.";
+    note.append(title, detail);
+    fragment.append(note);
+  }
+
+  for (const item of resolved) {
+    const { packet, status } = item;
+    const isNewDevice = newDevice && status === "fail";
     const bubble = document.createElement("article");
     bubble.className = `message ${packet.header.sender_user_id === state.user.id ? "me" : ""}`;
     const meta = document.createElement("div");
     meta.className = "meta";
     const actor = packet.header.sender_user_id === state.user.id ? "You" : packet.header.sender_user_id;
-    meta.textContent = `${actor} - #${packet.header.message_number} - ${failed ? "decrypt failed" : "decrypted locally"}`;
+    const stateLabel = status === "ok" ? "decrypted locally" : isNewDevice ? "new device" : "decrypt failed";
+    meta.textContent = `${actor} - #${packet.header.message_number} - ${stateLabel}`;
     const text = document.createElement("div");
     text.className = "body";
-    text.textContent = body;
+    if (status === "ok") {
+      text.textContent = item.body;
+    } else if (isNewDevice) {
+      text.textContent = "🔒 Encrypted for your previous device";
+    } else {
+      text.textContent = `Decrypt failed: ${item.body}`;
+    }
     bubble.append(meta, text);
     fragment.append(bubble);
   }
@@ -849,6 +887,7 @@ async function logout() {
   state.lastMessages = [];
   state.renderedKey = null;
   state.decryptCache.clear();
+  state.contactKeyChanged = false;
   state.adminData = null;
   clearSession();
   $("#appPanel").hidden = true;
