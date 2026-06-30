@@ -121,6 +121,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    signing_public_key: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -137,6 +138,7 @@ class User(Base):
             "username": self.username,
             "password_hash": self.password_hash,
             "is_admin": self.is_admin,
+            "signing_public_key": self.signing_public_key,
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
         }
@@ -179,6 +181,7 @@ class Device(Base):
     device_label: Mapped[str] = mapped_column(String(80), nullable=False)
     identity_public_key: Mapped[dict] = mapped_column(JSON, nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    device_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -192,6 +195,7 @@ class Device(Base):
             "device_label": self.device_label,
             "identity_public_key": self.identity_public_key,
             "fingerprint": self.fingerprint,
+            "device_signature": self.device_signature,
             "created_at": iso(self.created_at),
             "last_seen_at": iso(self.last_seen_at),
             "revoked_at": iso(self.revoked_at),
@@ -280,6 +284,38 @@ class SecurityEvent(Base):
             "actor_ip": self.actor_ip,
             "actor_user_agent": self.actor_user_agent,
             "detail": self.detail,
+            "created_at": iso(self.created_at),
+        }
+
+
+
+class PreKey(Base):
+    __tablename__ = "pre_keys"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    device_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    public_key_jwk: Mapped[dict] = mapped_column(JSON, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    is_otp: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "device_id": self.device_id,
+            "key_id": self.key_id,
+            "public_key_jwk": self.public_key_jwk,
+            "fingerprint": self.fingerprint,
+            "signature": self.signature,
+            "is_otp": self.is_otp,
+            "consumed_at": iso(self.consumed_at),
             "created_at": iso(self.created_at),
         }
 

@@ -177,9 +177,18 @@
                   <dl class="key-facts">
                     <div><dt>Local device</dt><dd id="localDeviceId">-</dd></div>
                     <div><dt>Local fingerprint</dt><dd id="localKeyFingerprint">-</dd></div>
+                    <div><dt>Local signing key</dt><dd id="localSigningKey">-</dd></div>
                     <div><dt>Peer</dt><dd id="keyOwner">-</dd></div>
                     <div><dt>Peer device</dt><dd id="keyDevice">-</dd></div>
                   </dl>
+                  <div class="fingerprint-box mb-2">
+                    <span class="text-secondary small">Peer fingerprint</span>
+                    <pre id="fingerprintView" class="m-0">Select a contact to view the key fingerprint.</pre>
+                  </div>
+                  <div class="fingerprint-box">
+                    <span class="text-secondary small">Identity key fingerprint</span>
+                    <pre id="identityKeyFingerprint" class="m-0">No identity key bound yet.</pre>
+                  </div>
                   <div class="fingerprint-box">
                     <span class="text-secondary small">Peer fingerprint</span>
                     <pre id="fingerprintView" class="m-0">Select a contact to view the key fingerprint.</pre>

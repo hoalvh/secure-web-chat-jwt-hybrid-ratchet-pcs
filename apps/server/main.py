@@ -42,6 +42,7 @@ from apps.server.db import (
     DATABASE_URL,
     Device,
     Message,
+    PreKey,
     RefreshSession,
     SecurityEvent,
     SessionLocal,
@@ -382,11 +383,21 @@ class DeviceRequest(BaseModel):
     device_label: str = Field(default="browser")
     public_key_jwk: dict[str, Any]
     fingerprint: str
+    device_signature: str | None = None
     device_id: str | None = None
 
 
 class MessageRequest(BaseModel):
     packet: dict[str, Any]
+
+
+class SigningKeyRequest(BaseModel):
+    signing_key_jwk: dict[str, Any]
+    fingerprint: str
+
+
+class PreKeyUploadRequest(BaseModel):
+    pre_keys: list[dict[str, Any]]
 
 
 class ReplayRequest(BaseModel):
@@ -513,6 +524,23 @@ def logout(
 @app.get("/me")
 def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     return {"user": public_user(user["id"])}
+
+
+@app.post("/keys/signing-key")
+def upload_signing_key(
+    payload: SigningKeyRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    with SessionLocal() as session:
+        db_user = session.get(User, user["id"])
+        if db_user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        db_user.signing_public_key = payload.signing_key_jwk
+        db_user.updated_at = utcnow()
+        session.commit()
+    record_event("SIGNING_KEY_UPLOADED", user["id"], {"fingerprint": payload.fingerprint}, request=request)
+    return {"ok": True, "fingerprint": payload.fingerprint}
 
 
 @app.get("/users")
@@ -645,6 +673,7 @@ def create_or_update_device(
         device.device_label = payload.device_label.strip()[:80] or "browser"
         device.identity_public_key = payload.public_key_jwk
         device.fingerprint = payload.fingerprint
+        device.device_signature = payload.device_signature
         device.created_at = created_at
         device.last_seen_at = utcnow()
         device.revoked_at = None
@@ -672,19 +701,141 @@ def list_devices(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]
 def key_bundle(username: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     target = normalize_username(username)
     with SessionLocal() as session:
-        if session.get(User, target) is None:
+        target_user = session.get(User, target)
+        if target_user is None:
             raise HTTPException(status_code=404, detail="User does not exist")
         device = latest_device_for_user(session, target)
         if not device:
             raise HTTPException(status_code=404, detail="User has no device key")
+
+        # Fetch an available one-time pre-key
+        otp_stmt = (
+            select(PreKey)
+            .where(
+                PreKey.user_id == target,
+                PreKey.is_otp == True,
+                PreKey.consumed_at.is_(None),
+            )
+            .order_by(PreKey.created_at.asc())
+            .limit(1)
+        )
+        one_time_pre_key = session.scalars(otp_stmt).first()
+
+        # Fetch signed pre-key (non-OTP)
+        spk_stmt = (
+            select(PreKey)
+            .where(
+                PreKey.user_id == target,
+                PreKey.is_otp == False,
+                PreKey.consumed_at.is_(None),
+            )
+            .order_by(PreKey.created_at.desc())
+            .limit(1)
+        )
+        signed_pre_key = session.scalars(spk_stmt).first()
+
         bundle = {
             "user_id": target,
             "device_id": device.id,
             "identity_public_key": device.identity_public_key,
             "fingerprint": device.fingerprint,
+            "device_signature": device.device_signature,
+            "signing_public_key": target_user.signing_public_key,
+            "signed_pre_key": signed_pre_key.as_dict() if signed_pre_key else None,
+            "one_time_pre_key": one_time_pre_key.as_dict() if one_time_pre_key else None,
             "created_at": device.as_dict()["created_at"],
         }
     return bundle
+
+
+@app.post("/keys/pre-keys")
+def upload_pre_keys(
+    payload: PreKeyUploadRequest,
+    request: Request,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    now = utcnow()
+    created = 0
+    with SessionLocal() as session:
+        for key_data in payload.pre_keys:
+            if "private_key_jwk" in key_data or (key_data.get("public_key_jwk") and "d" in key_data["public_key_jwk"]):
+                record_event("PRIVATE_KEY_REJECTED", user["id"], {"note": "Attempted to upload private key material"}, severity="warning", request=request)
+                raise HTTPException(status_code=400, detail="Private key material is not allowed")
+            pre_key_id = f"pk_{user['id']}_{key_data.get('key_id', key_data.get('fingerprint', secrets.token_urlsafe(8)))}"
+            existing = session.get(PreKey, pre_key_id)
+            if existing:
+                continue
+            session.add(
+                PreKey(
+                    id=pre_key_id,
+                    user_id=user["id"],
+                    device_id=key_data.get("device_id", f"{user['id']}-browser"),
+                    key_id=key_data.get("key_id", secrets.token_urlsafe(8)),
+                    public_key_jwk=key_data["public_key_jwk"],
+                    fingerprint=key_data["fingerprint"],
+                    signature=key_data.get("signature", ""),
+                    is_otp=key_data.get("is_otp", False),
+                    consumed_at=None,
+                    created_at=now,
+                )
+            )
+            created += 1
+        session.commit()
+    record_event("PRE_KEYS_UPLOADED", user["id"], {"count": created}, request=request)
+    return {"ok": True, "created": created}
+
+
+@app.get("/keys/pre-keys/{username}")
+def get_pre_keys(username: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    target = normalize_username(username)
+    with SessionLocal() as session:
+        otp_stmt = (
+            select(PreKey)
+            .where(
+                PreKey.user_id == target,
+                PreKey.is_otp == True,
+                PreKey.consumed_at.is_(None),
+            )
+            .order_by(PreKey.created_at.asc())
+        )
+        one_time_keys = [k.as_dict() for k in session.scalars(otp_stmt).all()]
+
+        spk_stmt = (
+            select(PreKey)
+            .where(
+                PreKey.user_id == target,
+                PreKey.is_otp == False,
+                PreKey.consumed_at.is_(None),
+            )
+            .order_by(PreKey.created_at.desc())
+        )
+        signed_pre_keys = [k.as_dict() for k in session.scalars(spk_stmt).all()]
+    return {"one_time_pre_keys": one_time_keys, "signed_pre_keys": signed_pre_keys}
+
+
+@app.post("/keys/consume-otp/{username}")
+def consume_one_time_pre_key(
+    username: str,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    target = normalize_username(username)
+    with SessionLocal() as session:
+        otp_stmt = (
+            select(PreKey)
+            .where(
+                PreKey.user_id == target,
+                PreKey.is_otp == True,
+                PreKey.consumed_at.is_(None),
+            )
+            .order_by(PreKey.created_at.asc())
+            .limit(1)
+        )
+        pre_key = session.scalars(otp_stmt).first()
+        if pre_key is None:
+            return {"pre_key": None}
+        pre_key.consumed_at = utcnow()
+        session.commit()
+        return {"pre_key": pre_key.as_dict()}
 
 
 @app.post("/messages")

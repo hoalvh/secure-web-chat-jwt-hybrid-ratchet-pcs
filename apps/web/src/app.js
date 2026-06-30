@@ -14,6 +14,9 @@ const state = {
   refreshTimer: null,
   renderedKey: null,
   decryptCache: new Map(),
+  signingKey: null,
+  signingKeyPair: null,
+  identityKeyCache: new Map(),
 };
 
 const SESSION_KEY = "secure-chat-session";
@@ -139,7 +142,80 @@ async function hkdfBytes(inputBytes, saltBytes, infoText, lengthBytes = 32) {
   return new Uint8Array(bits);
 }
 
-async function deriveRootKey(remotePublicJwk) {
+// ----- X3DH Key Agreement -----
+
+async function computeX3dhRootKey(contactBundle, ephemeralKeyPair) {
+  // X3DH: combines multiple DH agreements for forward secrecy
+  // DH1 = ECDH(our_static, contact_static)
+  // DH2 = ECDH(ephemeral, contact_static)
+  // DH3 = ECDH(ephemeral, contact_signed_pre_key)
+  // DH4 = ECDH(ephemeral, contact_otp) [if available]
+  
+  const ourStaticKey = await crypto.subtle.importKey(
+    "jwk", state.device.privateKeyJwk,
+    { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]
+  );
+  const contactStatic = await crypto.subtle.importKey(
+    "jwk", contactBundle.identity_public_key,
+    { name: "ECDH", namedCurve: "P-256" }, false, []
+  );
+  const contactPreKey = contactBundle.signed_pre_key ? await crypto.subtle.importKey(
+    "jwk", contactBundle.signed_pre_key.public_key_jwk,
+    { name: "ECDH", namedCurve: "P-256" }, false, []
+  ) : null;
+  const contactOtp = contactBundle.one_time_pre_key ? await crypto.subtle.importKey(
+    "jwk", contactBundle.one_time_pre_key.public_key_jwk,
+    { name: "ECDH", namedCurve: "P-256" }, false, []
+  ) : null;
+  
+  const ephPrivate = await crypto.subtle.importKey(
+    "jwk", ephemeralKeyPair.privateKeyJwk,
+    { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]
+  );
+  const ephPublicJwk = ephemeralKeyPair.publicKeyJwk;
+  
+  // DH1: our_static × contact_static
+  const dh1 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: contactStatic }, ourStaticKey, 256));
+  
+  // DH2: ephemeral × contact_static  
+  const dh2 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: contactStatic }, ephPrivate, 256));
+  
+  // Build concatenated input
+  const parts = [dh1, dh2];
+  
+  // DH3: ephemeral × contact_signed_pre_key
+  if (contactPreKey) {
+    const dh3 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: contactPreKey }, ephPrivate, 256));
+    parts.push(dh3);
+  }
+  
+  // DH4: ephemeral × contact_otp
+  if (contactOtp) {
+    const dh4 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: contactOtp }, ephPrivate, 256));
+    parts.push(dh4);
+  }
+  
+  // Combine all DH outputs
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    combined.set(part, offset);
+    offset += part.length;
+  }
+  
+  const localFingerprint = state.device.fingerprint;
+  const remoteFingerprint = contactBundle.fingerprint;
+  const salt = await sha256(encoder.encode([localFingerprint, remoteFingerprint].sort().join("|")));
+  return hkdfBytes(combined, salt, "x3dh-root", 32);
+}
+
+async function deriveRootKey(remotePublicJwk, options = {}) {
+  // If X3DH ephemeral info is provided, use X3DH
+  if (options.ephemeralKeyPair && options.contactBundle) {
+    return computeX3dhRootKey(options.contactBundle, options.ephemeralKeyPair);
+  }
+  // Legacy static-static ECDH fallback
   const privateKey = await crypto.subtle.importKey(
     "jwk",
     state.device.privateKeyJwk,
@@ -180,18 +256,59 @@ async function encryptPacket(plaintext) {
   if (!state.contactBundle) {
     throw new Error("Open a contact before sending");
   }
-  const rootKey = await deriveRootKey(state.contactBundle.identity_public_key);
   const messageNumber = await nextMessageNumber();
+  const isFirstMessage = messageNumber === 1;
+  
+  // Generate ephemeral key for X3DH on first message
+  let ephemeralKeyPair = null;
+  let rootKey;
+  let usedPreKeyId = null;
+  let usedOtpId = null;
+  
+  if (isFirstMessage && state.contactBundle.signed_pre_key) {
+    const ephPair = await crypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]
+    );
+    const ephPublicJwk = await crypto.subtle.exportKey("jwk", ephPair.publicKey);
+    const ephPrivateJwk = await crypto.subtle.exportKey("jwk", ephPair.privateKey);
+    ephemeralKeyPair = { publicKeyJwk: ephPublicJwk, privateKeyJwk: ephPrivateJwk };
+    
+    rootKey = await deriveRootKey(null, {
+      ephemeralKeyPair,
+      contactBundle: state.contactBundle,
+    });
+    
+    usedPreKeyId = state.contactBundle.signed_pre_key.key_id;
+    if (state.contactBundle.one_time_pre_key) {
+      usedOtpId = state.contactBundle.one_time_pre_key.key_id;
+      // Consume the OTP on server
+      try {
+        await api("/keys/consume-otp/" + encodeURIComponent(state.contact), { method: "POST" });
+      } catch (_) { /* OTP already consumed by another party */ }
+    }
+  } else {
+    rootKey = await deriveRootKey(state.contactBundle.identity_public_key);
+  }
+  
   const header = {
-    version: 1,
+    version: isFirstMessage && ephemeralKeyPair ? 2 : 1,
     conversation_id: conversationId(state.user.id, state.contact),
     sender_user_id: state.user.id,
     sender_device_id: state.device.deviceId,
     recipient_user_id: state.contact,
     recipient_device_id: state.contactBundle.device_id,
     message_number: messageNumber,
-    ratchet_public_key: state.device.fingerprint,
   };
+  
+  if (ephemeralKeyPair) {
+    header.algorithm = "X3DH-P-256+HKDF-SHA256+AES-GCM";
+    header.ephemeral_public_key = ephemeralKeyPair.publicKeyJwk;
+    header.used_pre_key_id = usedPreKeyId;
+    if (usedOtpId) header.used_otp_id = usedOtpId;
+  } else {
+    header.ratchet_public_key = state.device.fingerprint;
+  }
+  
   const messageKey = await deriveMessageKey(rootKey, header);
   const aesKey = await crypto.subtle.importKey("raw", messageKey, "AES-GCM", false, ["encrypt"]);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -204,9 +321,10 @@ async function encryptPacket(plaintext) {
   );
   const ciphertext = sealed.slice(0, sealed.length - 16);
   const tag = sealed.slice(sealed.length - 16);
+  const algorithm = ephemeralKeyPair ? "X3DH-P-256+HKDF-SHA256+AES-GCM" : "ECDH-P-256+HKDF-SHA256+AES-GCM";
   return {
-    version: 1,
-    algorithm: "ECDH-P-256+HKDF-SHA256+AES-GCM",
+    version: header.version,
+    algorithm,
     header,
     nonce: toBase64Url(nonce),
     ciphertext: toBase64Url(ciphertext),
@@ -216,7 +334,7 @@ async function encryptPacket(plaintext) {
 
 async function decryptPacket(packet, options = {}) {
   const header = packet.header || {};
-  if (header.version !== 1) {
+  if (header.version !== 1 && header.version !== 2) {
     throw new Error("Unsupported packet version");
   }
   if (![header.sender_user_id, header.recipient_user_id].includes(state.user.id)) {
@@ -228,7 +346,78 @@ async function decryptPacket(packet, options = {}) {
   }
   const peer = header.sender_user_id === state.user.id ? header.recipient_user_id : header.sender_user_id;
   const bundle = await getKeyBundle(peer);
-  const rootKey = await deriveRootKey(bundle.identity_public_key);
+  
+  let rootKey;
+  if (header.version === 2 && header.ephemeral_public_key) {
+    // X3DH decryption: reconstruct all DH agreements using stored pre-key private keys
+    const ephPublicJwk = header.ephemeral_public_key;
+    const senderBundle = await getKeyBundle(header.sender_user_id);
+    
+    // Import keys for DH computation
+    const ephPublic = await crypto.subtle.importKey(
+      "jwk", ephPublicJwk,
+      { name: "ECDH", namedCurve: "P-256" }, false, []
+    );
+    const ourDevicePrivate = await crypto.subtle.importKey(
+      "jwk", state.device.privateKeyJwk,
+      { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]
+    );
+    
+    // Load pre-key private keys from IndexedDB
+    const preKeyStore = await idbGet("devices", state.user.id + "_prekeys") || {};
+    
+    // Compute DH values (pairwise: our_private × sender_public)
+    // DH1: our_device × their_device (symmetric to sender's DH1 with our_device)
+    const theirDevicePublic = await crypto.subtle.importKey(
+      "jwk", senderBundle.identity_public_key,
+      { name: "ECDH", namedCurve: "P-256" }, false, []
+    );
+    const dh1 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: theirDevicePublic }, ourDevicePrivate, 256));
+    
+    // DH2: our_device × their_ephemeral
+    const dh2 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: ephPublic }, ourDevicePrivate, 256));
+    
+    // Concatenate DH1 || DH2
+    const parts = [dh1, dh2];
+    
+    // DH3: our_signed_pre_key_private × their_ephemeral
+    if (header.used_pre_key_id && preKeyStore[header.used_pre_key_id]) {
+      const spkPrivate = await crypto.subtle.importKey(
+        "jwk", preKeyStore[header.used_pre_key_id],
+        { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]
+      );
+      const dh3 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: ephPublic }, spkPrivate, 256));
+      parts.push(dh3);
+    }
+    
+    // DH4: our_otp_private × their_ephemeral (if one-time pre-key was used)
+    if (header.used_otp_id && preKeyStore[header.used_otp_id]) {
+      const otpPrivate = await crypto.subtle.importKey(
+        "jwk", preKeyStore[header.used_otp_id],
+        { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]
+      );
+      const dh4 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: ephPublic }, otpPrivate, 256));
+      parts.push(dh4);
+    }
+    
+    // Combine all DH outputs
+    const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+    const combined = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const part of parts) {
+      combined.set(part, offset);
+      offset += part.length;
+    }
+    
+    const localFingerprint = state.device.fingerprint;
+    const remoteFingerprint = senderBundle.fingerprint;
+    const salt = await sha256(encoder.encode([localFingerprint, remoteFingerprint].sort().join("|")));
+    rootKey = await hkdfBytes(combined, salt, "x3dh-root", 32);
+  } else {
+    // Legacy static-static ECDH
+    rootKey = await deriveRootKey(bundle.identity_public_key);
+  }
+  
   const messageKey = await deriveMessageKey(rootKey, header);
   const aesKey = await crypto.subtle.importKey("raw", messageKey, "AES-GCM", false, ["decrypt"]);
   const ciphertext = fromBase64Url(packet.ciphertext);
@@ -259,6 +448,7 @@ function openDb() {
       const db = request.result;
       if (!db.objectStoreNames.contains("devices")) db.createObjectStore("devices", { keyPath: "username" });
       if (!db.objectStoreNames.contains("safety")) db.createObjectStore("safety", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("identity_keys")) db.createObjectStore("identity_keys", { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -309,6 +499,8 @@ async function api(path, options = {}) {
   return data;
 }
 
+let _sessionPassword = "";
+
 async function submitAuth(mode) {
   const username = $("#usernameInput").value.trim();
   const password = $("#passwordInput").value;
@@ -317,6 +509,7 @@ async function submitAuth(mode) {
   const data = await api(`/auth/${mode}`, { method: "POST", body: { username, password } });
   state.token = data.access_token;
   state.user = data.user;
+  _sessionPassword = password;
   saveSession();
   await enterApp();
 }
@@ -336,6 +529,7 @@ async function enterApp() {
   $("#adminPanel").hidden = true;
   $("#appPanel").hidden = false;
   setText("#sessionTitle", `${state.user.username} secure session`);
+  await ensureIdentityKey(state.user.id, _sessionPassword);
   await ensureDevice();
   await loadUsers();
   connectWebSocket();
@@ -367,6 +561,7 @@ async function restoreSession() {
 
 async function ensureDevice() {
   let record = await idbGet("devices", state.user.id);
+  let needsUpload = false;
   if (!record) {
     const keyPair = await crypto.subtle.generateKey(
       { name: "ECDH", namedCurve: "P-256" },
@@ -376,27 +571,49 @@ async function ensureDevice() {
     const publicKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
     const privateKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
     const fingerprint = await fingerprintForPublicKey(publicKeyJwk);
+    // Sign device key with identity key
+    const dataToSign = encoder.encode(canonical({ deviceId: `${state.user.id}-browser`, publicKeyJwk, fingerprint }));
+    const deviceSignature = await signWithIdentityKey(dataToSign);
     record = {
       username: state.user.id,
       deviceId: `${state.user.id}-browser`,
       publicKeyJwk,
       privateKeyJwk,
       fingerprint,
+      deviceSignature,
       createdAt: new Date().toISOString(),
     };
     await idbPut("devices", record);
+    needsUpload = true;
+  } else if (!record.deviceSignature && state.signingKey) {
+    // Backfill signature for existing device
+    const dataToSign = encoder.encode(canonical({ deviceId: record.deviceId, publicKeyJwk: record.publicKeyJwk, fingerprint: record.fingerprint }));
+    record.deviceSignature = await signWithIdentityKey(dataToSign);
+    await idbPut("devices", record);
+    needsUpload = true;
   }
   state.device = record;
-  await api("/devices", {
-    method: "POST",
-    body: {
-      device_id: record.deviceId,
-      device_label: "Browser demo device",
-      public_key_jwk: record.publicKeyJwk,
-      fingerprint: record.fingerprint,
-    },
-  });
+  const body = {
+    device_id: record.deviceId,
+    device_label: "Browser demo device",
+    public_key_jwk: record.publicKeyJwk,
+    fingerprint: record.fingerprint,
+  };
+  if (record.deviceSignature) body.device_signature = record.deviceSignature;
+  await api("/devices", { method: "POST", body });
+  
+  // Upload pre-keys if this is a fresh device or needs them
+  if (needsUpload) {
+    const preKeys = await generatePreKeys(record.deviceId);
+    // Strip private key material before sending to server
+    const publicPreKeys = preKeys.map(({ private_key_jwk: _, ...rest }) => rest);
+    await api("/keys/pre-keys", { method: "POST", body: { pre_keys: publicPreKeys } });
+  }
   setText("#deviceBadge", `Device ${shortFingerprint(record.fingerprint)}`);
+  const idKeyRecord = await idbGet(IDENTITY_STORE, state.user.id);
+  if (idKeyRecord) {
+    setText("#localSigningKey", prettyFingerprint(idKeyRecord.fingerprint));
+  }
   setText("#localDeviceId", record.deviceId);
   setText("#localKeyFingerprint", prettyFingerprint(record.fingerprint));
 }
@@ -407,6 +624,32 @@ async function getKeyBundle(username) {
     return state.keyBundles.get(clean);
   }
   const bundle = await api(`/keys/bundle/${encodeURIComponent(clean)}`);
+  
+  // Verify device signature using the contact's identity (signing) key
+  if (bundle.signing_public_key && bundle.device_signature) {
+    const deviceData = encoder.encode(canonical({ deviceId: bundle.device_id, publicKeyJwk: bundle.identity_public_key, fingerprint: bundle.fingerprint }));
+    try {
+      const valid = await verifyEcdsaSignature(bundle.signing_public_key, deviceData, bundle.device_signature);
+      bundle._deviceSigVerified = valid;
+    } catch (_) {
+      bundle._deviceSigVerified = false;
+    }
+  } else {
+    bundle._deviceSigVerified = null; // no signature to verify
+  }
+  
+  // Verify signed pre-key signature if present
+  if (bundle.signed_pre_key && bundle.signing_public_key && bundle.signed_pre_key.signature) {
+    const spk = bundle.signed_pre_key;
+    const spkData = encoder.encode(canonical({ keyId: spk.key_id, publicKeyJwk: spk.public_key_jwk, fingerprint: spk.fingerprint }));
+    try {
+      const valid = await verifyEcdsaSignature(bundle.signing_public_key, spkData, spk.signature);
+      bundle._spkVerified = valid;
+    } catch (_) {
+      bundle._spkVerified = false;
+    }
+  }
+  
   state.keyBundles.set(clean, bundle);
   return bundle;
 }
@@ -677,29 +920,64 @@ async function openContact(username) {
   if (!clean) return;
   state.contact = clean;
   state.contactBundle = await getKeyBundle(clean);
+  
   const safetyId = `${state.user.id}:${clean}`;
   const savedSafety = await idbGet("safety", safetyId);
-  const current = state.contactBundle.fingerprint;
-  if (savedSafety && savedSafety.fingerprint !== current) {
+  const bundle = state.contactBundle;
+  
+  // Check device signature verification result
+  let trustMsg = "Unverified";
+  let trustClass = "neutral";
+  if (bundle._deviceSigVerified === true) {
+    trustMsg = "Key signed ✓";
+    trustClass = "ok";
+  } else if (bundle._deviceSigVerified === false) {
+    trustMsg = "Signature INVALID!";
+    trustClass = "bad";
+  }
+  
+  // TOFU: track identity (signing) key fingerprint, not just device key
+  const identityKeyForTrust = bundle.signing_public_key ? 
+    await fingerprintForPublicKey(bundle.signing_public_key) : bundle.fingerprint;
+  
+  if (savedSafety && savedSafety.identityFingerprint && savedSafety.identityFingerprint !== identityKeyForTrust) {
     $("#trustBadge").className = "badge bad";
-    setText("#trustBadge", "Key changed");
+    setText("#trustBadge", "Identity changed!");
+    if (bundle._deviceSigVerified === false) setText("#trustBadge", "SIGNATURE MISMATCH");
   } else {
-    $("#trustBadge").className = "badge ok";
-    setText("#trustBadge", savedSafety ? "Key verified" : "Unverified key");
     if (!savedSafety) {
-      await idbPut("safety", { id: safetyId, fingerprint: current, firstSeenAt: new Date().toISOString() });
+      await idbPut("safety", { 
+        id: safetyId, 
+        fingerprint: bundle.fingerprint, 
+        identityFingerprint: identityKeyForTrust,
+        firstSeenAt: new Date().toISOString() 
+      });
+    }
+    if (trustClass === "bad") {
+      $("#trustBadge").className = "badge bad";
+      setText("#trustBadge", trustMsg);
+    } else if (savedSafety) {
+      $("#trustBadge").className = "badge ok";
+      setText("#trustBadge", "Identity verified");
+    } else {
+      $("#trustBadge").className = "badge neutral";
+      setText("#trustBadge", trustMsg);
     }
   }
-  setText("#fingerprintView", prettyFingerprint(current));
+  
+  setText("#fingerprintView", prettyFingerprint(identityKeyForTrust));
   setText("#keyOwner", clean);
-  setText("#keyDevice", state.contactBundle.device_id);
+  setText("#keyDevice", bundle.device_id);
+  if (bundle.signing_public_key) {
+    setText("#identityKeyFingerprint", prettyFingerprint(identityKeyForTrust));
+  }
   setText("#conversationTitle", `${state.user.username} to ${clean}`);
   setText("#contactMeta", `Conversation ${conversationId(state.user.id, clean)} - message keys derived locally`);
   $("#messageInput").disabled = false;
   $("#sendButton").disabled = false;
   $("#cryptoBadge").className = "badge neutral";
-  setText("#cryptoBadge", "ECDH ready");
-  state.renderedKey = null; // force a fresh render when switching contacts
+  setText("#cryptoBadge", "X3DH ready");
+  state.renderedKey = null;
   await refreshMessages({ force: true });
 }
 
@@ -829,6 +1107,180 @@ function connectWebSocket() {
   ws.addEventListener("close", () => {
     if (state.user) setText("#syncBadge", "WS closed");
   });
+}
+
+// ----- Identity Key Management (ECDSA P-256 for signing) -----
+
+const IDENTITY_STORE = "identity_keys";
+
+async function deriveKeyFromPassword(password, salt) {
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", encoder.encode(password), "PBKDF2", false, ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["wrapKey", "unwrapKey"]
+  );
+}
+
+async function generateIdentityKey() {
+  const keyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"]
+  );
+  const publicKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  const privateKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+  const fingerprint = await fingerprintForPublicKey(publicKeyJwk);
+  return { keyPair, publicKeyJwk, privateKeyJwk, fingerprint };
+}
+
+async function encryptIdentityKey(privateKeyJwk, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const wrappingKey = await deriveKeyFromPassword(password, salt);
+  const privateKey = await crypto.subtle.importKey(
+    "jwk", privateKeyJwk, { name: "ECDSA", namedCurve: "P-256" },
+    true, ["sign"]
+  );
+  const wrapped = new Uint8Array(
+    await crypto.subtle.wrapKey("jwk", privateKey, wrappingKey, { name: "AES-GCM", iv: crypto.getRandomValues(new Uint8Array(12)) })
+  );
+  return { salt: toBase64Url(salt), wrapped: toBase64Url(wrapped) };
+}
+
+async function tryDecryptIdentityKey(username, password) {
+  const record = await idbGet(IDENTITY_STORE, username);
+  if (!record) return null;
+  const salt = fromBase64Url(record.wrappedSalt);
+  const wrapped = fromBase64Url(record.encryptedPrivateKey);
+  const wrappingKey = await deriveKeyFromPassword(password, salt);
+  try {
+    keyPair = await crypto.subtle.unwrapKey(
+      "jwk", wrapped, wrappingKey,
+      { name: "AES-GCM", iv: new Uint8Array(12) },
+      { name: "ECDSA", namedCurve: "P-256" },
+      true, ["sign"]
+    );
+    return keyPair;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function ensureIdentityKey(username, password) {
+  // Try to load existing identity key
+  let keyPair = await tryDecryptIdentityKey(username, password);
+  if (keyPair) {
+    state.signingKey = keyPair;
+    state.signingKeyPair = keyPair;
+    return;
+  }
+  // Generate new identity key
+  const idKey = await generateIdentityKey();
+  const encrypted = await encryptIdentityKey(idKey.privateKeyJwk, password);
+  await idbPut(IDENTITY_STORE, {
+    id: username,
+    username,
+    publicKeyJwk: idKey.publicKeyJwk,
+    fingerprint: idKey.fingerprint,
+    wrappedSalt: encrypted.salt,
+    encryptedPrivateKey: encrypted.wrapped,
+    createdAt: new Date().toISOString(),
+  });
+  // Reload
+  state.signingKey = await tryDecryptIdentityKey(username, password);
+  state.signingKeyPair = state.signingKey;
+  
+  // Upload signing public key to server
+  await api("/keys/signing-key", {
+    method: "POST",
+    body: { signing_key_jwk: idKey.publicKeyJwk, fingerprint: idKey.fingerprint },
+  });
+}
+
+async function signWithIdentityKey(data) {
+  if (!state.signingKey) throw new Error("No identity key loaded");
+  const sig = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    state.signingKey,
+    data
+  );
+  return toBase64Url(new Uint8Array(sig));
+}
+
+async function verifyEcdsaSignature(publicKeyJwk, data, signatureB64) {
+  const publicKey = await crypto.subtle.importKey(
+    "jwk", publicKeyJwk, { name: "ECDSA", namedCurve: "P-256" },
+    false, ["verify"]
+  );
+  return crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    publicKey,
+    fromBase64Url(signatureB64),
+    data
+  );
+}
+
+// ----- Pre-Key Generation -----
+
+async function generatePreKeys(deviceId) {
+  const preKeys = [];
+  const privateKeys = {};
+  
+  // Generate one signed pre-key (SPK)
+  const spkPair = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    true, ["deriveBits"]
+  );
+  const spkPublic = await crypto.subtle.exportKey("jwk", spkPair.publicKey);
+  const spkPrivate = await crypto.subtle.exportKey("jwk", spkPair.privateKey);
+  const spkFingerprint = await fingerprintForPublicKey(spkPublic);
+  const spkToSign = encoder.encode(canonical({ keyId: "spk1", publicKeyJwk: spkPublic, fingerprint: spkFingerprint }));
+  const spkSig = await signWithIdentityKey(spkToSign);
+  preKeys.push({
+    key_id: "spk1",
+    device_id: deviceId,
+    public_key_jwk: spkPublic,
+    private_key_jwk: spkPrivate,
+    fingerprint: spkFingerprint,
+    signature: spkSig,
+    is_otp: false,
+  });
+  privateKeys.spk1 = spkPrivate;
+  
+  // Generate 5 one-time pre-keys (OTP)
+  for (let i = 1; i <= 5; i++) {
+    const otpPair = await crypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" },
+      true, ["deriveBits"]
+    );
+    const otpPublic = await crypto.subtle.exportKey("jwk", otpPair.publicKey);
+    const otpPrivate = await crypto.subtle.exportKey("jwk", otpPair.privateKey);
+    const otpFingerprint = await fingerprintForPublicKey(otpPublic);
+    const otpToSign = encoder.encode(canonical({ keyId: "otp" + i, publicKeyJwk: otpPublic, fingerprint: otpFingerprint }));
+    const otpSig = await signWithIdentityKey(otpToSign);
+    preKeys.push({
+      key_id: "otp" + i,
+      device_id: deviceId,
+      public_key_jwk: otpPublic,
+      private_key_jwk: otpPrivate,
+      fingerprint: otpFingerprint,
+      signature: otpSig,
+      is_otp: true,
+    });
+    privateKeys["otp" + i] = otpPrivate;
+  }
+  
+  // Store private keys in IndexedDB for decryption later
+  const preKeyStore = await idbGet("devices", state.user.id + "_prekeys") || {};
+  Object.assign(preKeyStore, privateKeys);
+  preKeyStore.id = state.user.id + "_prekeys";
+  await idbPut("devices", preKeyStore);
+  
+  return preKeys;
 }
 
 async function logout() {

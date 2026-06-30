@@ -174,3 +174,238 @@ def test_normal_user_contact_list_hides_admin_accounts() -> None:
     assert response.status_code == 200, response.text
     usernames = [user["username"] for user in response.json()["users"]]
     assert usernames == ["bob"]
+
+# ----- Identity keys, signatures, and pre-keys -----
+
+def sample_signing_key(username: str) -> dict[str, str]:
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": f"{username}_sign_x",
+        "y": f"{username}_sign_y",
+        "ext": "true",
+    }
+
+
+def test_upload_signing_key() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    signing_key = sample_signing_key("alice")
+    response = client.post(
+        "/keys/signing-key",
+        headers=auth_headers(alice_token),
+        json={"signing_key_jwk": signing_key, "fingerprint": "alice-sign-fp"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+
+
+def test_pre_key_upload_and_bundle_includes_pre_keys() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    bob_token = register(client, "bob")
+
+    # Alice uploads device + signing key + pre-keys
+    client.post(
+        "/devices",
+        headers=auth_headers(alice_token),
+        json={
+            "device_id": "alice-browser",
+            "device_label": "Browser",
+            "public_key_jwk": sample_public_key("alice"),
+            "fingerprint": "alice-fingerprint",
+            "device_signature": "alice-sig-over-device-key",
+        },
+    )
+    client.post(
+        "/keys/signing-key",
+        headers=auth_headers(alice_token),
+        json={"signing_key_jwk": sample_signing_key("alice"), "fingerprint": "alice-sign-fp"},
+    )
+    client.post(
+        "/keys/pre-keys",
+        headers=auth_headers(alice_token),
+        json={
+            "pre_keys": [
+                {
+                    "key_id": "spk1",
+                    "device_id": "alice-browser",
+                    "public_key_jwk": {"kty": "EC", "crv": "P-256", "x": "spk_x", "y": "spk_y"},
+                    "fingerprint": "alice-spk-fp",
+                    "signature": "alice-sig-over-spk",
+                    "is_otp": False,
+                },
+                {
+                    "key_id": "otp1",
+                    "device_id": "alice-browser",
+                    "public_key_jwk": {"kty": "EC", "crv": "P-256", "x": "otp_x", "y": "otp_y"},
+                    "fingerprint": "alice-otp1-fp",
+                    "signature": "alice-sig-over-otp1",
+                    "is_otp": True,
+                },
+            ]
+        },
+    )
+
+    # Bob now fetches Alice's bundle — should see all the new fields
+    bundle = client.get("/keys/bundle/alice", headers=auth_headers(bob_token))
+    assert bundle.status_code == 200, bundle.text
+    data = bundle.json()
+
+    # Identity (signing) key should be present
+    assert data["signing_public_key"] is not None
+    assert data["signing_public_key"]["x"] == "alice_sign_x"
+
+    # Device signature should be present
+    assert data["device_signature"] == "alice-sig-over-device-key"
+
+    # Signed pre-key should be present
+    assert data["signed_pre_key"] is not None
+    assert data["signed_pre_key"]["fingerprint"] == "alice-spk-fp"
+
+    # One-time pre-key should be present
+    assert data["one_time_pre_key"] is not None
+    assert data["one_time_pre_key"]["fingerprint"] == "alice-otp1-fp"
+
+
+def test_pre_keys_endpoint() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+
+    client.post(
+        "/devices",
+        headers=auth_headers(alice_token),
+        json={
+            "device_id": "alice-browser",
+            "device_label": "Browser",
+            "public_key_jwk": sample_public_key("alice"),
+            "fingerprint": "alice-fingerprint",
+        },
+    )
+
+    # Upload pre-keys
+    client.post(
+        "/keys/pre-keys",
+        headers=auth_headers(alice_token),
+        json={
+            "pre_keys": [
+                {
+                    "key_id": "spk1",
+                    "device_id": "alice-browser",
+                    "public_key_jwk": {"kty": "EC", "crv": "P-256", "x": "spk_x", "y": "spk_y"},
+                    "fingerprint": "alice-spk-fp",
+                    "signature": "alice-sig-over-spk",
+                    "is_otp": False,
+                },
+                {
+                    "key_id": "otp1",
+                    "device_id": "alice-browser",
+                    "public_key_jwk": {"kty": "EC", "crv": "P-256", "x": "otp_x", "y": "otp_y"},
+                    "fingerprint": "alice-otp1-fp",
+                    "signature": "alice-sig-over-otp1",
+                    "is_otp": True,
+                },
+            ]
+        },
+    )
+
+    # Fetch pre-keys for alice
+    response = client.get("/keys/pre-keys/alice", headers=auth_headers(alice_token))
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["one_time_pre_keys"]) == 1
+    assert data["one_time_pre_keys"][0]["fingerprint"] == "alice-otp1-fp"
+    assert len(data["signed_pre_keys"]) == 1
+    assert data["signed_pre_keys"][0]["fingerprint"] == "alice-spk-fp"
+
+
+def test_consume_one_time_pre_key() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    bob_token = register(client, "bob")
+
+    client.post(
+        "/devices",
+        headers=auth_headers(alice_token),
+        json={
+            "device_id": "alice-browser",
+            "device_label": "Browser",
+            "public_key_jwk": sample_public_key("alice"),
+            "fingerprint": "alice-fingerprint",
+        },
+    )
+    client.post(
+        "/keys/pre-keys",
+        headers=auth_headers(alice_token),
+        json={
+            "pre_keys": [
+                {
+                    "key_id": "otp1",
+                    "device_id": "alice-browser",
+                    "public_key_jwk": {"kty": "EC", "crv": "P-256", "x": "otp_x", "y": "otp_y"},
+                    "fingerprint": "alice-otp1-fp",
+                    "signature": "alice-sig-over-otp1",
+                    "is_otp": True,
+                },
+            ]
+        },
+    )
+
+    # Bob consumes Alice's OTP
+    consumed = client.post("/keys/consume-otp/alice", headers=auth_headers(bob_token))
+    assert consumed.status_code == 200, consumed.text
+    assert consumed.json()["pre_key"] is not None
+
+    # Second consume should return None (already consumed)
+    second = client.post("/keys/consume-otp/alice", headers=auth_headers(bob_token))
+    assert second.status_code == 200, second.text
+    assert second.json()["pre_key"] is None
+
+
+def test_bundle_includes_signature_and_device_signature() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    bob_token = register(client, "bob")
+
+    # Bob uploads device with signature and signing key
+    client.post(
+        "/devices",
+        headers=auth_headers(bob_token),
+        json={
+            "device_id": "bob-browser",
+            "device_label": "Browser",
+            "public_key_jwk": sample_public_key("bob"),
+            "fingerprint": "bob-fingerprint",
+            "device_signature": "bob-ik-sig-over-device",
+        },
+    )
+    client.post(
+        "/keys/signing-key",
+        headers=auth_headers(bob_token),
+        json={"signing_key_jwk": sample_signing_key("bob"), "fingerprint": "bob-sign-fp"},
+    )
+    client.post(
+        "/keys/pre-keys",
+        headers=auth_headers(bob_token),
+        json={
+            "pre_keys": [
+                {
+                    "key_id": "spk1",
+                    "device_id": "bob-browser",
+                    "public_key_jwk": {"kty": "EC", "crv": "P-256", "x": "spk_x", "y": "spk_y"},
+                    "fingerprint": "bob-spk-fp",
+                    "signature": "bob-ik-sig-over-spk",
+                    "is_otp": False,
+                },
+            ]
+        },
+    )
+
+    bundle = client.get("/keys/bundle/bob", headers=auth_headers(alice_token))
+    assert bundle.status_code == 200, bundle.text
+    data = bundle.json()
+    assert data["signing_public_key"] is not None
+    assert data["device_signature"] == "bob-ik-sig-over-device"
+    assert data["signed_pre_key"] is not None
+    assert data["signed_pre_key"]["signature"] == "bob-ik-sig-over-spk"
+    assert data["fingerprint"] == "bob-fingerprint"
