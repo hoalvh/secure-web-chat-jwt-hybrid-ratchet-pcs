@@ -34,7 +34,7 @@ Storage risks concern data stored on the server, in the browser, and in the data
 
 | Risk | Description | Security goal | How the project handles it |
 |---|---|---|---|
-| Server store compromise | Attacker reads the server database (`data/secure_chat.db` or PostgreSQL) or the server-data dashboard | The server must not store plaintext messages or private keys | The server stores only password hashes, refresh-token hashes, public keys, nonce, ciphertext, tag, and metadata |
+| Server store compromise | Attacker reads the server database (`data/secure_chat.db` or PostgreSQL) or the server-data dashboard | The server must not store plaintext messages, private keys, or client session keys | The server stores only password hashes, refresh-token hashes, public keys, and offline/manual ciphertext packets; live online packets can be relay-only |
 | Password database leak | Attacker obtains the user list and password hashes | Do not store passwords in cleartext | Passwords are hashed with Argon2id when the dependency is present; the scrypt fallback is dev-only |
 | Refresh token leak from the store | Attacker reads the session store | Do not store refresh tokens in cleartext | The server stores only the SHA-256 hash of each refresh token |
 | Private key uploaded to the server | Client mistakenly sends a private JWK | The private key must stay in the browser | `/devices` rejects `public_key_jwk` that contains the private field `d` |
@@ -165,13 +165,13 @@ Message flow:
 ```text
 Alice opens Bob
 -> GET /keys/bundle/bob
--> Alice imports Bob public key
--> ECDH P-256 derives shared secret
--> HKDF-SHA256 derives root key
--> HKDF derives per-message key
+-> Alice verifies Bob's device signature and signed pre-key
+-> On first send, GET /keys/bundle/bob?reserve_otp=true reserves one OTP if available
+-> X3DH-style P-256 DH inputs derive a local session root
+-> HKDF-SHA256 derives a session chain and per-message key
 -> AES-GCM encrypts plaintext with canonical header as AAD
 -> POST /messages sends header, nonce, ciphertext, tag
--> Server validates and stores encrypted packet
+-> Server validates and live-relays, or stores ciphertext only for offline/manual delivery
 -> WebSocket notifies recipient
 -> Recipient fetches packet and decrypts locally
 ```
@@ -453,7 +453,7 @@ The demo results show the project meets the main goals of a secure-web-chat prot
 This is a course prototype, not a production messenger:
 
 - Not a full Signal implementation.
-- No X3DH, signed prekeys, skipped-message keys, or full Double Ratchet.
+- X3DH-style identity/pre-key session setup is implemented for the teaching demo, but skipped-message keys and full Double Ratchet are still missing.
 - PCS is currently shown as a concept/lab metric, not a proof of a full ratchet.
 - Browser compromise, XSS, malware, or malicious extensions can still read tokens/keys in the browser.
 - Storage is already a real database (SQLite local / PostgreSQL deploy, Alembic migrations); the main remaining limitations are the crypto core (full Double Ratchet/PCS) and deployment/CI, not the storage layer.

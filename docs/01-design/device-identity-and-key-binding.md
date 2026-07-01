@@ -7,10 +7,11 @@ This document describes how account identity is connected to cryptographic devic
 - Account ID: server-side username.
 - Device ID: server-visible browser device identifier, usually `{username}-browser`.
 - Device key: ECDH P-256 key pair generated in the browser through Web Crypto.
-- Public key bundle: public JWK, device ID, username, fingerprint, and timestamps.
-- Local private key: private JWK stored in IndexedDB.
+- Identity signing key: ECDSA P-256 key generated in the browser and wrapped locally with a password-derived AES-GCM key.
+- Public key bundle: device public JWK, identity signing public JWK, signed pre-key, optional one-time pre-key, device ID, username, fingerprint, and timestamps.
+- Local private key material: device private JWK, identity signing key wrapper, signed pre-key private JWK, one-time pre-key private JWKs, and dynamic session state stored in IndexedDB.
 
-The current implementation does not use Ed25519 identity signatures, signed prekeys, or one-time prekeys. Those remain future protocol work.
+The current implementation uses ECDSA/P-256 identity signatures and an X3DH-style teaching flow. It is not Signal-compatible X3DH and does not implement a full Double Ratchet.
 
 ## Security UX Requirements
 
@@ -31,7 +32,7 @@ If the server can replace Bob's public key without Alice noticing, end-to-end en
 | Public key format | JWK public key | Native Web Crypto import/export format |
 | Public key directory | FastAPI + SQLAlchemy database (`devices` table) | Simple key lookup for local demo and lab evidence |
 | Local private-key storage | IndexedDB native API | Browser-compatible persistence without a build dependency |
-| Safety display | SHA-256 fingerprint of public JWK | Human-checkable indicator for key substitution warnings |
+| Safety display | SHA-256 fingerprint of identity/device public JWK | Human-checkable indicator for key substitution warnings |
 
 ## Account and Device Identity
 
@@ -54,8 +55,9 @@ The browser calls `POST /devices` with:
 - `device_label`
 - `public_key_jwk`
 - `fingerprint`
+- `device_signature` when an identity signing key is available
 
-The backend rejects a public key JWK if it includes the private-key field `d`. This is the most important server-side device-boundary check in the current MVP.
+The backend rejects nested private key material in device, signing-key, pre-key, and message submissions. This is the most important server-side key-boundary check in the current MVP.
 
 ## Key Bundle Lookup
 
@@ -63,6 +65,7 @@ The sender fetches a contact key through:
 
 ```text
 GET /keys/bundle/{username}
+GET /keys/bundle/{username}?reserve_otp=true   # only when starting a new session
 ```
 
 The response contains:
@@ -71,9 +74,13 @@ The response contains:
 - Device ID.
 - Public key JWK.
 - Fingerprint.
+- Identity signing public key.
+- Device signature.
+- Signed pre-key.
+- One available one-time pre-key only when `reserve_otp=true`; the server marks that OTP consumed in the same transaction.
 - Creation timestamp.
 
-The server is trusted for availability and routing, but not for silent key honesty. The UI must still expose fingerprints and key changes.
+The server is trusted for availability and routing, but not for silent key honesty. The UI must still expose fingerprints, verify signatures, and block sending when a known identity changes or a signature is invalid.
 
 ## IndexedDB for Local Keys
 
@@ -82,6 +89,9 @@ The current browser stores:
 - Device private JWK.
 - Device public JWK.
 - Fingerprint.
+- Wrapped identity signing key.
+- Signed pre-key and one-time pre-key private JWKs.
+- Dynamic session root/chain state and local encrypted packet history.
 - Per-contact saved fingerprint/safety state.
 
 This keeps private keys out of the backend. It does not protect against XSS, malicious extensions, or a fully compromised browser.
@@ -104,16 +114,14 @@ Current backend/demo behavior:
 - The user UI compares fingerprints when opening a contact and shows a warning if the saved value changes.
 - The admin dashboard can show public-key records and security events for evidence.
 
-Future UX can pause sending until the user explicitly accepts or verifies the new fingerprint.
+The current UI blocks sending on identity change or invalid signatures. Future UX can add an explicit verified safety-number ceremony for legitimate device replacement.
 
 ## Future Work
 
 Future protocol work can add:
 
-- Ed25519 identity signatures.
-- Signed prekeys.
-- One-time prekeys.
-- Full X3DH-style initial session setup.
+- Ed25519/X25519 or another audited protocol suite.
+- Signal-compatible X3DH and Double Ratchet.
 - QR or numeric safety-number comparison.
 - Key transparency or an append-only audit log.
 - Multi-device identity binding.

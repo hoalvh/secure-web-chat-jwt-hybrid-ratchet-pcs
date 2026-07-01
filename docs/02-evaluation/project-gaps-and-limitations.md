@@ -13,8 +13,9 @@ Already implemented:
 - JWT access tokens and a refresh-token cookie.
 - Browser-generated ECDH keys; private key stored in IndexedDB.
 - Public key published to the server.
+- Browser identity signing key, signed pre-key, one-time pre-key, and dynamic per-conversation session state.
 - Message encryption/decryption with the Web Crypto API.
-- Server stores only ciphertext, nonce, tag, and metadata.
+- Server stores only ciphertext, nonce, tag, and metadata when offline delivery or explicit storage is needed; live online delivery is relay-only.
 - **A real database**: SQLAlchemy with SQLite (local) / PostgreSQL (deploy) via `DATABASE_URL`, foreign keys and cascade rules, a normalised `conversations` table, and **Alembic migrations**.
 - Expired refresh sessions are cleaned up; the event log records severity, IP, and user-agent.
 - Admin dashboard (Tabler) showing password hashes, refresh-token hashes, public keys, conversations, ciphertext, and the event log.
@@ -24,7 +25,7 @@ Already implemented:
 
 Not production-ready because:
 
-- The crypto protocol is not full Signal / Double Ratchet; PCS is only a simulated metric.
+- The crypto protocol is stronger than the initial static-ECDH demo, but still not full Signal / Double Ratchet; PCS is only a simulated metric.
 - No key backup/recovery or key export/import.
 - No hardening against XSS/malware/malicious extensions; no rate limiting; no CSP/security headers.
 - No real deployment (Dockerfile/CI-CD/HTTPS) and no monitoring.
@@ -65,9 +66,9 @@ The interface was rebuilt with **Tabler (admin) + Bootstrap (chat)** over a CDN 
 
 | Area | Current | Missing | Upgrade path |
 |---|---|---|---|
-| Device key | ECDH P-256 browser key | No identity key + signed prekey + one-time prekey | Design X3DH or an equivalent |
-| Key exchange | Direct ECDH via the public key directory | No complete defense against server key substitution | Key transparency or signed key bundles |
-| Message key | HKDF per-message key | Not a full Double Ratchet | Implement a full Double Ratchet |
+| Device/session keys | ECDH P-256 device key, ECDSA identity key, signed pre-key, one-time pre-key, local `session_id` state | Not a full Signal-compatible X3DH/Double Ratchet stack | Finish skipped-message keys, DH ratchet, and protocol test vectors |
+| Key exchange | X3DH-style browser session setup over a server public-key directory | No complete defense against malicious server key substitution on first contact | Key transparency, QR/safety-number verification, or signed append-only key history |
+| Message key | HKDF per-session/per-message key chain | Not a full Double Ratchet; limited recovery after client-state compromise | Implement a full Double Ratchet |
 | Replay handling | Demo packet ID / message number | No production replay window | Store receive counters / skipped keys |
 | Tamper detection | AES-GCM AAD header | Good for the demo, needs broader tests | Test header/ciphertext/tag changes thoroughly |
 | PCS | Lab metric / concept | No real DH-ratchet message flow | Add real ratchet steps and rekeying |
@@ -80,7 +81,7 @@ This project borrows Signal's ideas but is not a Signal implementation.
 
 | Area | Current | Missing | Upgrade path |
 |---|---|---|---|
-| Private key storage | IndexedDB | Losing browser data loses the key | Add a backup/recovery phrase |
+| Private/session key storage | IndexedDB for device key, pre-key private keys, identity key wrapper, session state, and local encrypted history | Losing browser data loses the key/session state and may make live-only history undecryptable | Add a backup/recovery phrase |
 | Recovery phrase | None | User cannot restore the key on a new machine | Generate 12/24 words or a backup code via CSPRNG |
 | Key export | None | No encrypted private-key export | Export a wrapped/encrypted private key |
 | Key import | None | No import when switching machines | Import from a recovery phrase or backup file |
@@ -161,7 +162,7 @@ The admin dashboard is an observation view over the server store, not a complete
 | Rate limit | None | Login/API rate limiting |
 | Content Security Policy | None | CSP header |
 | Secure cookie | `secure=False` for the local demo (`COOKIE_SECURE` switch exists) | Must be `secure=True` over HTTPS in production |
-| Token storage | Access token in sessionStorage | Needs a deeper XSS-risk assessment |
+| Token storage | Access token in sessionStorage; reload without password returns to login to avoid silently rotating identity keys | Needs a deeper XSS-risk assessment |
 | Admin data exposure | Admin views hashes/ciphertext | Stronger audit/logging and finer authorization |
 | Device revocation | `revoked_at` field, no UI/endpoint | Revoke lost/compromised devices |
 
@@ -169,9 +170,9 @@ The admin dashboard is an observation view over the server store, not a complete
 
 - React/Vue/Next frontend (currently vanilla JS + Tabler/Bootstrap).
 - Full Signal protocol.
-- X3DH handshake.
-- Signed prekeys.
-- One-time prekeys.
+- Signal-compatible X3DH test vectors and transcript format.
+- Key transparency or QR/safety-number verification.
+- Encrypted multi-device backup/history sync.
 - Full Double Ratchet.
 - Group chat.
 - Encrypted file/image upload.

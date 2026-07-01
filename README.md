@@ -27,8 +27,10 @@ The current MVP includes:
 - Device public key registration.
 - Browser-generated ECDH P-256 device keys.
 - Local private-key storage in IndexedDB.
-- One-to-one ciphertext relay over REST and WebSocket notification.
-- Browser-side ECDH, HKDF-SHA256, and AES-GCM encryption/decryption.
+- Relay-first one-to-one delivery: if the recipient is online, the server forwards ciphertext without storing it; if the recipient is offline or the sender explicitly asks, the server stores ciphertext as an offline queue.
+- Browser-side ECDH, X3DH-style session setup, HKDF-SHA256 session/message-key derivation, and AES-GCM encryption/decryption.
+- Atomic one-time pre-key reservation through `GET /keys/bundle/{username}?reserve_otp=true` when a new dynamic session is started.
+- Dynamic client-side session state in IndexedDB: each conversation direction can establish a `session_id`, session root key, and per-message chain key material that never leaves the browser.
 - AES-GCM associated data over the canonical packet header.
 - SQLAlchemy storage with foreign keys and a normalised `conversations` table; SQLite locally, PostgreSQL on deploy (selected by `DATABASE_URL`), schema managed by Alembic.
 - User chat UI (Bootstrap) focused on contacts, encrypted chat, and key fingerprints.
@@ -106,7 +108,7 @@ Normal user accounts create or reuse a local browser device key and publish only
 5. Logout, login as `bob`, open `alice`, and confirm Bob decrypts locally in the browser.
 6. Logout, login as `admin`, and review the dashboard.
 
-The admin dashboard should show password hashes, refresh-token hashes, public keys, ciphertext, nonce, tag, and routing metadata. It should not show plaintext message content or private key material.
+The admin dashboard should show password hashes, refresh-token hashes, public keys, stored/offline ciphertext, nonce, tag, and routing metadata. Live-relay messages are not written to the server database. The dashboard should not show plaintext message content, private key material, or client session keys.
 
 Manual decrypt check:
 
@@ -139,7 +141,7 @@ The device JSON must come from the browser IndexedDB device record and must cont
                                               +----------------------+
 ```
 
-JWT is used for server access. It does not encrypt or decrypt messages. Private keys stay in the browser, and the backend rejects device submissions that include private JWK material.
+JWT is used for server access. It does not encrypt or decrypt messages. Private keys, session root keys, and message-chain state stay in the browser, and the backend rejects nested private JWK material in device, signing-key, pre-key, and message submissions.
 
 ## Technology Stack
 
@@ -175,6 +177,7 @@ GET  /users
 POST /devices
 GET  /devices
 GET  /keys/bundle/{username}
+GET  /keys/bundle/{username}?reserve_otp=true
 ```
 
 Messages and realtime:
@@ -278,7 +281,8 @@ The current backend tests (9 in `apps/server/tests/`) cover register/login, devi
 - The DH rekey/PCS behavior is currently represented in the Security Lab metrics rather than a complete production double-ratchet message flow.
 - The in-memory WebSocket manager means the server should run as a single worker (no horizontal scaling yet).
 - No rate limiting, CSP/security headers, or deployment/CI is set up yet; HTTPS toggles (`COOKIE_SECURE`, `CORS_ORIGINS`) exist but are not wired to a live deploy.
-- IndexedDB keeps the demo usable across reloads, but it does not protect against XSS, malware, or malicious browser extensions; there is no key backup/recovery yet.
+- IndexedDB keeps device keys, pre-key private keys, local encrypted history, and dynamic session state on the client, but it does not protect against XSS, malware, or malicious browser extensions; there is no key backup/recovery yet.
+- The dynamic session chain uses a Signal-inspired signed pre-key / one-time pre-key setup and reduces server influence, but it is still not full Signal Double Ratchet with skipped-message keys and post-compromise recovery.
 - Browser private keys are extractable in the current demo so the Web Crypto flow is easier to inspect and rerun.
 - A committed Playwright test suite and full benchmark result files have not been added yet.
 

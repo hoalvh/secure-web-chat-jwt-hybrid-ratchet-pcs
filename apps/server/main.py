@@ -96,6 +96,35 @@ def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+PRIVATE_KEY_FIELD_NAMES = {
+    "d",
+    "p",
+    "q",
+    "dp",
+    "dq",
+    "qi",
+    "oth",
+    "private_key_jwk",
+    "privatekeyjwk",
+    "private_key",
+    "privatekey",
+}
+
+
+def contains_private_jwk_material(value: Any) -> bool:
+    """Return true if a nested JSON-like value contains private JWK fields."""
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized_key = str(key).strip().lower()
+            if normalized_key in PRIVATE_KEY_FIELD_NAMES:
+                return True
+            if contains_private_jwk_material(nested):
+                return True
+    elif isinstance(value, list):
+        return any(contains_private_jwk_material(item) for item in value)
+    return False
+
+
 def normalize_username(username: str) -> str:
     clean = username.strip().lower()
     if not clean or len(clean) > 32:
@@ -334,16 +363,24 @@ def ensure_conversation(session, conversation_id: str, sender: str, recipient: s
         conversation.last_message_at = utcnow()
 
 
-def store_message(packet: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
+def validate_encrypted_packet(packet: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
     if "plaintext" in canonical_json(packet).lower():
         raise HTTPException(status_code=400, detail="Plaintext must not be sent to server")
+    if contains_private_jwk_material(packet):
+        raise HTTPException(status_code=400, detail="Private key material is not allowed")
 
     header = packet.get("header") or {}
     sender_user_id = header.get("sender_user_id")
     recipient_user_id = header.get("recipient_user_id")
     if sender_user_id != actor_user_id:
         raise HTTPException(status_code=403, detail="Sender does not match access token")
-    required = ["version", "conversation_id", "message_number"]
+    required = [
+        "version",
+        "conversation_id",
+        "sender_user_id",
+        "recipient_user_id",
+        "message_number",
+    ]
     if any(key not in header for key in required):
         raise HTTPException(status_code=400, detail="Encrypted packet header is incomplete")
     if "ciphertext" not in packet or "nonce" not in packet or "tag" not in packet:
@@ -353,25 +390,80 @@ def store_message(packet: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
         message_number = int(header["message_number"])
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="message_number must be an integer") from exc
+    if message_number < 1:
+        raise HTTPException(status_code=400, detail="message_number must be positive")
 
     conversation_id = header["conversation_id"]
+    expected_conversation_id = "__".join(sorted([sender_user_id, recipient_user_id]))
+    if conversation_id != expected_conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id does not match participants")
+
+    return {
+        "header": header,
+        "sender_user_id": sender_user_id,
+        "recipient_user_id": recipient_user_id,
+        "conversation_id": conversation_id,
+        "message_number": message_number,
+    }
+
+
+def transient_message(packet: dict[str, Any], actor_user_id: str) -> dict[str, Any]:
+    context = validate_encrypted_packet(packet, actor_user_id)
+    return {
+        "id": "relay_" + secrets.token_urlsafe(12),
+        "conversation_id": context["conversation_id"],
+        "sender_user_id": context["sender_user_id"],
+        "recipient_user_id": context["recipient_user_id"],
+        "message_number": context["message_number"],
+        "packet": packet,
+        "server_received_at": utcnow().isoformat(),
+        "delivered_at": None,
+        "stored": False,
+        "storage_reason": "live_relay_only",
+    }
+
+
+def store_message(packet: dict[str, Any], actor_user_id: str, storage_reason: str = "offline_queue") -> dict[str, Any]:
+    context = validate_encrypted_packet(packet, actor_user_id)
     with SessionLocal() as session:
-        if session.get(User, recipient_user_id) is None:
+        if session.get(User, context["recipient_user_id"]) is None:
             raise HTTPException(status_code=404, detail="Recipient does not exist")
-        ensure_conversation(session, conversation_id, sender_user_id, recipient_user_id)
+        duplicate_scope = packet.get("header", {}).get("session_id") or context["conversation_id"]
+        duplicate = session.scalars(
+            select(Message).where(
+                Message.sender_user_id == context["sender_user_id"],
+                Message.recipient_user_id == context["recipient_user_id"],
+                Message.message_number == context["message_number"],
+            )
+        ).all()
+        for existing in duplicate:
+            existing_header = existing.packet.get("header", {}) if existing.packet else {}
+            existing_scope = existing_header.get("session_id") or existing.conversation_id
+            if existing_scope == duplicate_scope:
+                raise HTTPException(status_code=409, detail="Duplicate message number for this session")
+
+        ensure_conversation(
+            session,
+            context["conversation_id"],
+            context["sender_user_id"],
+            context["recipient_user_id"],
+        )
         message = Message(
             id="msg_" + secrets.token_urlsafe(12),
-            conversation_id=conversation_id,
-            sender_user_id=sender_user_id,
-            recipient_user_id=recipient_user_id,
-            message_number=message_number,
+            conversation_id=context["conversation_id"],
+            sender_user_id=context["sender_user_id"],
+            recipient_user_id=context["recipient_user_id"],
+            message_number=context["message_number"],
             packet=packet,
             server_received_at=utcnow(),
             delivered_at=None,
         )
         session.add(message)
         session.commit()
-        return message.as_dict()
+        result = message.as_dict()
+    result["stored"] = True
+    result["storage_reason"] = storage_reason
+    return result
 
 
 class AuthRequest(BaseModel):
@@ -389,6 +481,7 @@ class DeviceRequest(BaseModel):
 
 class MessageRequest(BaseModel):
     packet: dict[str, Any]
+    store_mode: str = Field(default="auto")
 
 
 class SigningKeyRequest(BaseModel):
@@ -532,6 +625,15 @@ def upload_signing_key(
     request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
+    if contains_private_jwk_material(payload.signing_key_jwk):
+        record_event(
+            "PRIVATE_KEY_REJECTED",
+            user["id"],
+            {"note": "Attempted to upload private signing key material"},
+            severity="warning",
+            request=request,
+        )
+        raise HTTPException(status_code=400, detail="Private key material is not allowed")
     with SessionLocal() as session:
         db_user = session.get(User, user["id"])
         if db_user is None:
@@ -645,7 +747,14 @@ def create_or_update_device(
     request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    if "d" in payload.public_key_jwk:
+    if contains_private_jwk_material(payload.public_key_jwk):
+        record_event(
+            "PRIVATE_KEY_REJECTED",
+            user["id"],
+            {"note": "Attempted to upload private device key material"},
+            severity="warning",
+            request=request,
+        )
         raise HTTPException(status_code=400, detail="Private key material is not allowed")
 
     device_id = payload.device_id or f"{user['id']}-browser"
@@ -698,7 +807,11 @@ def list_devices(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]
 
 
 @app.get("/keys/bundle/{username}")
-def key_bundle(username: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+def key_bundle(
+    username: str,
+    reserve_otp: bool = False,
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
     target = normalize_username(username)
     with SessionLocal() as session:
         target_user = session.get(User, target)
@@ -708,18 +821,24 @@ def key_bundle(username: str, user: dict[str, Any] = Depends(current_user)) -> d
         if not device:
             raise HTTPException(status_code=404, detail="User has no device key")
 
-        # Fetch an available one-time pre-key
-        otp_stmt = (
-            select(PreKey)
-            .where(
-                PreKey.user_id == target,
-                PreKey.is_otp == True,
-                PreKey.consumed_at.is_(None),
+        one_time_pre_key_payload = None
+        if reserve_otp:
+            # Fetch and reserve an available one-time pre-key in this transaction.
+            # Returning and consuming it together avoids two senders using the same OTP.
+            otp_stmt = (
+                select(PreKey)
+                .where(
+                    PreKey.user_id == target,
+                    PreKey.is_otp == True,
+                    PreKey.consumed_at.is_(None),
+                )
+                .order_by(PreKey.created_at.asc())
+                .limit(1)
             )
-            .order_by(PreKey.created_at.asc())
-            .limit(1)
-        )
-        one_time_pre_key = session.scalars(otp_stmt).first()
+            one_time_pre_key = session.scalars(otp_stmt).first()
+            if one_time_pre_key is not None:
+                one_time_pre_key_payload = one_time_pre_key.as_dict()
+                one_time_pre_key.consumed_at = utcnow()
 
         # Fetch signed pre-key (non-OTP)
         spk_stmt = (
@@ -733,6 +852,9 @@ def key_bundle(username: str, user: dict[str, Any] = Depends(current_user)) -> d
             .limit(1)
         )
         signed_pre_key = session.scalars(spk_stmt).first()
+        signed_pre_key_payload = signed_pre_key.as_dict() if signed_pre_key else None
+        device_payload = device.as_dict()
+        session.commit()
 
         bundle = {
             "user_id": target,
@@ -741,9 +863,9 @@ def key_bundle(username: str, user: dict[str, Any] = Depends(current_user)) -> d
             "fingerprint": device.fingerprint,
             "device_signature": device.device_signature,
             "signing_public_key": target_user.signing_public_key,
-            "signed_pre_key": signed_pre_key.as_dict() if signed_pre_key else None,
-            "one_time_pre_key": one_time_pre_key.as_dict() if one_time_pre_key else None,
-            "created_at": device.as_dict()["created_at"],
+            "signed_pre_key": signed_pre_key_payload,
+            "one_time_pre_key": one_time_pre_key_payload,
+            "created_at": device_payload["created_at"],
         }
     return bundle
 
@@ -758,7 +880,7 @@ def upload_pre_keys(
     created = 0
     with SessionLocal() as session:
         for key_data in payload.pre_keys:
-            if "private_key_jwk" in key_data or (key_data.get("public_key_jwk") and "d" in key_data["public_key_jwk"]):
+            if contains_private_jwk_material(key_data):
                 record_event("PRIVATE_KEY_REJECTED", user["id"], {"note": "Attempted to upload private key material"}, severity="warning", request=request)
                 raise HTTPException(status_code=400, detail="Private key material is not allowed")
             pre_key_id = f"pk_{user['id']}_{key_data.get('key_id', key_data.get('fingerprint', secrets.token_urlsafe(8)))}"
@@ -844,14 +966,7 @@ async def post_message(
     request: Request,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    message = store_message(payload.packet, user["id"])
-    record_event(
-        "CIPHERTEXT_STORED",
-        user["id"],
-        {"message_id": message["id"], "recipient_user_id": message["recipient_user_id"]},
-        request=request,
-    )
-    await manager.send(message["recipient_user_id"], {"type": "encrypted_message", "message": message})
+    message = await relay_or_store_packet(payload.packet, user["id"], payload.store_mode, request=request)
     return {"message": message}
 
 
@@ -871,7 +986,10 @@ def offline_messages(
                 or peer_id in (message.sender_user_id, message.recipient_user_id)
             )
             if involves_user and involves_peer:
-                messages.append(message.as_dict())
+                item = message.as_dict()
+                item["stored"] = True
+                item["storage_reason"] = "server_queue"
+                messages.append(item)
     return {"messages": messages}
 
 
@@ -1041,6 +1159,9 @@ class ConnectionManager:
         if not sockets:
             self.active.pop(user_id, None)
 
+    def is_online(self, user_id: str) -> bool:
+        return bool(self.active.get(user_id))
+
     async def send(self, user_id: str, payload: dict[str, Any]) -> None:
         sockets = list(self.active.get(user_id, set()))
         for socket in sockets:
@@ -1050,6 +1171,60 @@ class ConnectionManager:
                 self.disconnect(user_id, socket)
 
 manager = ConnectionManager()
+
+
+async def relay_or_store_packet(
+    packet: dict[str, Any],
+    actor_user_id: str,
+    store_mode: str = "auto",
+    request: Request | None = None,
+) -> dict[str, Any]:
+    """Prefer live E2EE relay; store ciphertext only for offline/manual cases."""
+    context = validate_encrypted_packet(packet, actor_user_id)
+    with SessionLocal() as session:
+        if session.get(User, context["recipient_user_id"]) is None:
+            raise HTTPException(status_code=404, detail="Recipient does not exist")
+
+    mode = (store_mode or "auto").strip().lower()
+    if mode not in {"auto", "always", "never"}:
+        raise HTTPException(status_code=400, detail="store_mode must be auto, always, or never")
+
+    recipient_online = manager.is_online(context["recipient_user_id"])
+    if mode == "always":
+        should_store = True
+        storage_reason = "user_requested"
+    elif mode == "never":
+        if not recipient_online:
+            raise HTTPException(
+                status_code=409,
+                detail="Recipient is offline and server storage is disabled",
+            )
+        should_store = False
+        storage_reason = "live_relay_only"
+    else:
+        should_store = not recipient_online
+        storage_reason = "offline_queue" if should_store else "live_relay_only"
+
+    if should_store:
+        message = store_message(packet, actor_user_id, storage_reason=storage_reason)
+        event_type = "CIPHERTEXT_STORED"
+    else:
+        message = transient_message(packet, actor_user_id)
+        event_type = "CIPHERTEXT_RELAYED"
+
+    record_event(
+        event_type,
+        actor_user_id,
+        {
+            "message_id": message["id"],
+            "recipient_user_id": message["recipient_user_id"],
+            "stored": message["stored"],
+            "storage_reason": message["storage_reason"],
+        },
+        request=request,
+    )
+    await manager.send(message["recipient_user_id"], {"type": "encrypted_message", "message": message})
+    return message
 
 
 @app.websocket("/ws")
@@ -1075,10 +1250,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if frame.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
             elif frame.get("type") == "encrypted_message":
-                message = store_message(frame.get("packet", {}), user_id)
-                await manager.send(
-                    message["recipient_user_id"],
-                    {"type": "encrypted_message", "message": message},
+                await relay_or_store_packet(
+                    frame.get("packet", {}),
+                    user_id,
+                    frame.get("store_mode", "auto"),
                 )
     except WebSocketDisconnect:
         pass

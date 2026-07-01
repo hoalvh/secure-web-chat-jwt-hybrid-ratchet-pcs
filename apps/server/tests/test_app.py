@@ -1,10 +1,11 @@
 from fastapi.testclient import TestClient
 
-from apps.server.main import app, reset_demo_store
+from apps.server.main import app, manager, reset_demo_store
 
 
 def setup_function() -> None:
     reset_demo_store()
+    manager.active.clear()
 
 
 def auth_headers(token: str) -> dict[str, str]:
@@ -28,6 +29,35 @@ def sample_public_key(username: str) -> dict[str, str]:
         "y": f"{username}_public_y",
         "ext": "true",
     }
+
+
+def sample_packet(sender: str = "alice", recipient: str = "bob", number: int = 1) -> dict:
+    return {
+        "version": 3,
+        "algorithm": "X3DH-P-256+HKDF-SHA256+AES-GCM+SESSION-CHAIN",
+        "header": {
+            "version": 3,
+            "algorithm": "X3DH-P-256+HKDF-SHA256+AES-GCM+SESSION-CHAIN",
+            "conversation_id": "__".join(sorted([sender, recipient])),
+            "session_id": "sess_test",
+            "sender_user_id": sender,
+            "sender_device_id": f"{sender}-browser",
+            "recipient_user_id": recipient,
+            "recipient_device_id": f"{recipient}-browser",
+            "message_number": number,
+        },
+        "nonce": "nonce",
+        "ciphertext": "ciphertext",
+        "tag": "tag",
+    }
+
+
+class DummySocket:
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.payloads.append(payload)
 
 
 def test_register_login_device_and_ciphertext_lab_flow() -> None:
@@ -116,6 +146,65 @@ def test_server_rejects_plaintext_in_message_packet() -> None:
                 "tag": "tag",
                 "plaintext": "hello bob",
             }
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_auto_message_delivery_relays_live_without_server_storage() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    register(client, "bob")
+    dummy = DummySocket()
+    manager.active["bob"] = {dummy}
+    try:
+        response = client.post(
+            "/messages",
+            headers=auth_headers(alice_token),
+            json={"packet": sample_packet(), "store_mode": "auto"},
+        )
+        assert response.status_code == 200, response.text
+        message = response.json()["message"]
+        assert message["stored"] is False
+        assert message["storage_reason"] == "live_relay_only"
+        assert dummy.payloads and dummy.payloads[0]["message"]["id"] == message["id"]
+
+        offline = client.get("/messages/offline?peer=bob", headers=auth_headers(alice_token))
+        assert offline.status_code == 200, offline.text
+        assert offline.json()["messages"] == []
+    finally:
+        manager.active.pop("bob", None)
+
+
+def test_never_store_mode_refuses_offline_queue() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    register(client, "bob")
+    response = client.post(
+        "/messages",
+        headers=auth_headers(alice_token),
+        json={"packet": sample_packet(), "store_mode": "never"},
+    )
+    assert response.status_code == 409
+
+
+def test_server_rejects_nested_private_key_material() -> None:
+    client = TestClient(app)
+    alice_token = register(client, "alice")
+    response = client.post(
+        "/devices",
+        headers=auth_headers(alice_token),
+        json={
+            "device_id": "alice-browser",
+            "device_label": "Browser",
+            "public_key_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "ax",
+                "y": "ay",
+                "nested": {"d": "private"},
+            },
+            "fingerprint": "alice-fingerprint",
         },
     )
     assert response.status_code == 400
@@ -248,7 +337,11 @@ def test_pre_key_upload_and_bundle_includes_pre_keys() -> None:
     )
 
     # Bob now fetches Alice's bundle — should see all the new fields
-    bundle = client.get("/keys/bundle/alice", headers=auth_headers(bob_token))
+    preview = client.get("/keys/bundle/alice", headers=auth_headers(bob_token))
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["one_time_pre_key"] is None
+
+    bundle = client.get("/keys/bundle/alice?reserve_otp=true", headers=auth_headers(bob_token))
     assert bundle.status_code == 200, bundle.text
     data = bundle.json()
 
@@ -266,6 +359,10 @@ def test_pre_key_upload_and_bundle_includes_pre_keys() -> None:
     # One-time pre-key should be present
     assert data["one_time_pre_key"] is not None
     assert data["one_time_pre_key"]["fingerprint"] == "alice-otp1-fp"
+
+    second_bundle = client.get("/keys/bundle/alice?reserve_otp=true", headers=auth_headers(bob_token))
+    assert second_bundle.status_code == 200, second_bundle.text
+    assert second_bundle.json()["one_time_pre_key"] is None
 
 
 def test_pre_keys_endpoint() -> None:

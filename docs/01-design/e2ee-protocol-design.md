@@ -45,13 +45,14 @@ The current MVP uses a simple public key directory:
 1. A browser generates an ECDH P-256 device key pair.
 2. The private key stays in IndexedDB.
 3. The browser publishes the public key JWK and SHA-256 fingerprint to `/devices`.
-4. A sender fetches the recipient bundle from `/keys/bundle/{username}`.
-5. The sender derives an ECDH shared secret with the recipient public key.
-6. HKDF derives a root key and per-message keys.
-7. AES-GCM encrypts the plaintext locally.
-8. The server stores and relays only the encrypted packet.
+4. The browser also publishes an ECDSA identity public key, a signed pre-key, and one-time pre-keys; private pre-key material remains in IndexedDB.
+5. A sender previews the recipient public bundle from `/keys/bundle/{username}`; when starting a new session it calls `/keys/bundle/{username}?reserve_otp=true` so one available one-time pre-key is returned and atomically consumed in the same server transaction.
+6. The sender derives an X3DH-style session root key from `device identity x recipient signed pre-key`, `ephemeral x recipient device identity`, `ephemeral x recipient signed pre-key`, and optionally `ephemeral x consumed one-time pre-key`.
+7. HKDF derives a dynamic session chain and per-message keys under a local `session_id`.
+8. AES-GCM encrypts the plaintext locally.
+9. The server live-relays the encrypted packet when the recipient is online, or stores ciphertext only for offline/manual delivery.
 
-This is enough for the course demo but does not implement full X3DH, signed prekeys, skipped-message keys, or full Double Ratchet behavior.
+This is enough for the course demo but does not implement Signal-compatible X3DH, skipped-message keys, or full Double Ratchet behavior.
 
 ## Manual Decryption Requirements
 
@@ -104,7 +105,10 @@ Current header fields:
 | `recipient_user_id` | Recipient user |
 | `recipient_device_id` | Recipient browser device |
 | `message_number` | Per-direction message counter |
-| `ratchet_public_key` | Current demo fingerprint/ratchet marker |
+| `session_id` | Client-generated dynamic session identifier for version 3 packets |
+| `ephemeral_public_key` | Sender ephemeral key for the first session packet |
+| `used_pre_key_id` / `used_otp_id` | Recipient pre-key ids used in session setup |
+| `ratchet_public_key` | Legacy version 1 fingerprint/ratchet marker |
 
 The canonical JSON header is passed as AES-GCM associated data. If an attacker changes routing metadata or ciphertext, decryption should fail.
 
@@ -134,10 +138,9 @@ The UI therefore shows fingerprints and key-change warnings. This does not fully
 
 The project borrows the ideas of per-message keys, ratcheting, forward secrecy, and post-compromise recovery. The current implementation is intentionally simplified:
 
-- It uses one browser ECDH P-256 device key per user in the demo.
-- It derives deterministic per-message keys from a root key and message number.
-- It does not implement full X3DH.
-- It does not implement signed prekeys.
+- It uses browser ECDH P-256 device keys plus ECDSA identity signatures.
+- It derives per-message keys from a local session root and message number.
+- It implements an X3DH-style teaching flow, not a Signal-compatible X3DH implementation.
 - It does not implement full Double Ratchet message flow.
 - The PCS/DH rekey behavior is currently shown through Security Lab metrics rather than complete message-flow rekeying.
 

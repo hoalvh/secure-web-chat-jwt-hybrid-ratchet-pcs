@@ -560,11 +560,12 @@ Store the public key bundle in the database
 normalize username
 -> getKeyBundle(username)
 -> GET /keys/bundle/{username}
--> get the contact's public key + fingerprint
+-> get the contact's public key, signing key, signed pre-key, and fingerprint
+-> verify the device signature and signed pre-key signature
 -> check the IndexedDB safety record
 -> if the fingerprint changed: UI shows "Key changed"
 -> if first time: store the fingerprint in safety
--> enable the message input
+-> enable the message input only when the key checks are acceptable
 -> refreshMessages({ force: true })
 ```
 
@@ -575,7 +576,7 @@ normalize username
 ```text
 Read plaintext from the input
 -> encryptPacket(plaintext)
--> POST /messages { packet }
+-> POST /messages { packet, store_mode }
 -> clear the input
 -> refreshMessages()
 ```
@@ -583,10 +584,13 @@ Read plaintext from the input
 `encryptPacket()`:
 
 ```text
-rootKey = deriveRootKey(contact public key)
-messageNumber = nextMessageNumber()
-header = route + device + message_number metadata
-messageKey = deriveMessageKey(rootKey, header)
+if no outbound session exists:
+  GET /keys/bundle/{username}?reserve_otp=true
+  verify signed pre-key and optional one-time pre-key signatures
+  derive X3DH-style session root and create session_id
+messageNumber = session send counter + 1
+header = route + device + session + message_number metadata
+messageKey = deriveSessionMessageKey(rootKey, header)
 nonce = random 12 bytes
 AES-GCM encrypt plaintext
 AAD = canonical(header)
@@ -596,11 +600,13 @@ return packet { header, nonce, ciphertext, tag }
 Crypto detail:
 
 ```text
-ECDH P-256 privateKey(local) + publicKey(remote)
--> shared secret
--> HKDF-SHA256 with salt from both fingerprints
--> root key
--> HKDF directional chain key
+DH1 = sender device identity private x recipient signed pre-key public
+DH2 = sender ephemeral private x recipient device identity public
+DH3 = sender ephemeral private x recipient signed pre-key public
+DH4 = sender ephemeral private x recipient one-time pre-key public, if reserved
+-> HKDF-SHA256 with salt from both device fingerprints
+-> session root key
+-> HKDF directional session chain key
 -> HKDF per-message key
 -> AES-GCM encrypt
 ```
@@ -815,6 +821,7 @@ The admin dashboard does not return:
 | `POST /devices` | User chat | Publish the public key |
 | `GET /devices` | User chat | List the user's own devices |
 | `GET /keys/bundle/{username}` | User chat | Get a contact's public key |
+| `GET /keys/bundle/{username}?reserve_otp=true` | User chat | Start a new session and atomically reserve one OTP if available |
 | `POST /messages` | User chat | Send an encrypted packet |
 | `GET /messages/offline?peer=...` | User chat | Get encrypted packets for a peer |
 | `GET /admin/dashboard` | Admin | View server-side hashes/ciphertext/public keys/events |
@@ -882,7 +889,7 @@ The `/lab/...` endpoints remain in the backend for demo/security experiments, bu
 
 - This is a course prototype, not a production secure messenger.
 - Not a full Signal protocol.
-- No X3DH, signed prekeys, skipped-message keys, or full Double Ratchet.
+- X3DH-style identity/pre-key session setup is implemented for the teaching demo, but skipped-message keys and full Double Ratchet are still missing.
 - PCS is mostly a lab/concept endpoint, not a production ratchet.
 - IndexedDB private keys do not protect against XSS/malware/malicious browser extensions.
 - Storage is already a real database (SQLite local / PostgreSQL deploy, Alembic migrations); the main remaining limitations are the crypto core, deployment/CI, rate limiting, and key recovery.
